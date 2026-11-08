@@ -117,6 +117,8 @@ async def oauth_callback(
         # Redirect to frontend root
         return RedirectResponse(url="/")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=f"Authentication error: {str(e)}")
 
 @router.post("/logout")
