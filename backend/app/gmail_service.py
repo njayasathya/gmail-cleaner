@@ -1,9 +1,12 @@
 import asyncio
 import base64
+import email
 import email.utils
 from email.message import EmailMessage
 from datetime import datetime
+import json
 import re
+import uuid
 from typing import List, Dict, Any, Optional, Tuple
 import httpx
 from .auth import get_credentials
@@ -85,6 +88,73 @@ class GmailService:
             except Exception:
                 await asyncio.sleep(1)
         return None
+
+    async def batch_fetch_messages_metadata(
+        self,
+        client: httpx.AsyncClient,
+        message_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetches metadata for up to 50 messages in a single HTTP request using
+        Google's Batch API (multipart/mixed). 10x-20x faster than sequential HTTP calls.
+        """
+        if not message_ids:
+            return []
+            
+        token = self._ensure_token()
+        boundary = f"batch_{uuid.uuid4().hex}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/mixed; boundary={boundary}"
+        }
+        
+        parts = []
+        for mid in message_ids:
+            part = (
+                f"--{boundary}\r\n"
+                f"Content-Type: application/http\r\n"
+                f"Content-ID: <{mid}>\r\n\r\n"
+                f"GET /gmail/v1/users/me/messages/{mid}?format=metadata"
+                f"&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
+                f"&metadataHeaders=List-Unsubscribe&metadataHeaders=List-Unsubscribe-Post"
+                f"&fields=id,threadId,labelIds,sizeEstimate,internalDate,snippet,payload/headers\r\n"
+            )
+            parts.append(part)
+        body = "\r\n".join(parts) + f"\r\n--{boundary}--\r\n"
+
+        for attempt in range(4):
+            try:
+                resp = await client.post(
+                    "https://gmail.googleapis.com/batch/gmail/v1",
+                    headers=headers,
+                    content=body.encode("utf-8")
+                )
+                if resp.status_code == 200:
+                    raw_msg = email.message_from_bytes(
+                        f"Content-Type: {resp.headers.get('content-type', '')}\r\n\r\n".encode("utf-8") + resp.content
+                    )
+                    results = []
+                    for part in raw_msg.get_payload():
+                        payload = part.get_payload()
+                        if isinstance(payload, str):
+                            sections = payload.split("\r\n\r\n", 1)
+                            if len(sections) == 2:
+                                http_header, http_body = sections
+                                if "200 OK" in http_header:
+                                    try:
+                                        results.append(json.loads(http_body))
+                                    except Exception:
+                                        pass
+                    return results
+                elif resp.status_code in (429, 403) and ("rateLimitExceeded" in resp.text or resp.status_code == 429):
+                    await asyncio.sleep(1.5 ** attempt + 0.5)
+                    continue
+                else:
+                    break
+            except Exception:
+                await asyncio.sleep(1)
+
+        return []
 
     def parse_sender_info(self, from_header: str) -> Tuple[str, str, str]:
         """

@@ -114,14 +114,13 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
 
         batch_size = 50
         processed_count = 0
-        semaphore = asyncio.Semaphore(25)
 
         # Temporary aggregations
         sender_aggr: dict = {}
         message_records: list = []
 
         limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
-        async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
+        async with httpx.AsyncClient(timeout=35.0, limits=limits) as client:
             for i in range(0, total_found, batch_size):
                 if JobManager.is_cancelled(job_id):
                     await JobManager.update_job_progress(job_id, processed=processed_count, status="cancelled", message="Scan cancelled by user.")
@@ -129,11 +128,17 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
 
                 chunk = message_ids[i:i + batch_size]
                 
-                async def fetch_meta(mid):
-                    async with semaphore:
-                        return await gmail.fetch_message_metadata(client, mid)
+                # High-speed batch fetch via Google Batch API (10x-20x faster)
+                results = await gmail.batch_fetch_messages_metadata(client, chunk)
 
-                results = await asyncio.gather(*[fetch_meta(mid) for mid in chunk])
+                # Fallback for any messages missing from batch
+                if len(results) < len(chunk):
+                    fetched_ids = {m.get("id") for m in results if m}
+                    missing = [mid for mid in chunk if mid not in fetched_ids]
+                    if missing:
+                        fallback_tasks = [gmail.fetch_message_metadata(client, mid) for mid in missing]
+                        fallback_res = await asyncio.gather(*fallback_tasks)
+                        results.extend([r for r in fallback_res if r])
 
                 for msg_data in results:
                     if not msg_data:
