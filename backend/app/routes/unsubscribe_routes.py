@@ -3,9 +3,9 @@ from datetime import datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from ..database import get_db, AsyncSessionLocal
-from ..models import Sender
+from ..models import Sender, ScannedMessage
 from ..schemas import UnsubscribeRequest, UnsubscribeResult, BulkSenderActionRequest
 from ..unsubscribe_service import UnsubscribeService
 from ..jobs import JobManager
@@ -61,21 +61,24 @@ async def run_bulk_unsubscribe_worker(job_id: str, emails: List[str], trash_exis
         message=f"Starting bulk unsubscribe for {total} senders..."
     )
 
-    async with AsyncSessionLocal() as session:
-        for email in emails:
-            if JobManager.is_cancelled(job_id):
-                await JobManager.update_job_progress(job_id, processed=processed, status="cancelled", message="Bulk unsubscribe cancelled.")
-                return
+    for email in emails:
+        if JobManager.is_cancelled(job_id):
+            await JobManager.update_job_progress(job_id, processed=processed, status="cancelled", message="Bulk unsubscribe cancelled.")
+            return
 
-            await JobManager.update_job_progress(
-                job_id,
-                processed=processed,
-                current_item=email,
-                message=f"Unsubscribing from {email}..."
-            )
+        await JobManager.update_job_progress(
+            job_id,
+            processed=processed,
+            current_item=email,
+            message=f"Unsubscribing from {email}..."
+        )
 
+        res = None
+        sender_found = False
+        async with AsyncSessionLocal() as session:
             sender = await session.get(Sender, email)
             if sender:
+                sender_found = True
                 res = await service.execute_unsubscribe(sender, trash_existing=trash_existing)
                 if res.status == "success":
                     sender.is_unsubscribed = True
@@ -83,23 +86,25 @@ async def run_bulk_unsubscribe_worker(job_id: str, emails: List[str], trash_exis
                     if trash_existing:
                         sender.message_count = 0
                         sender.unread_count = 0
+                        await session.execute(
+                            delete(ScannedMessage).where(ScannedMessage.sender_email == email)
+                        )
                     success += 1
                 else:
                     errors += 1
             else:
                 errors += 1
+            await session.commit()
 
-            processed += 1
-            await JobManager.update_job_progress(
-                job_id,
-                processed=processed,
-                success_inc=1 if sender and res.status == "success" else 0,
-                error_inc=1 if not sender or res.status != "success" else 0,
-                current_item=email,
-                message=f"Completed {email} ({processed}/{total})"
-            )
-
-        await session.commit()
+        processed += 1
+        await JobManager.update_job_progress(
+            job_id,
+            processed=processed,
+            success_inc=1 if sender_found and res and res.status == "success" else 0,
+            error_inc=1 if not sender_found or (res and res.status != "success") else 0,
+            current_item=email,
+            message=f"Completed {email} ({processed}/{total})"
+        )
 
     await JobManager.update_job_progress(
         job_id,

@@ -39,28 +39,32 @@ async def execute_bulk_action_worker(
             status="running",
             message=f"Starting demo {action_type} for {total_senders} senders..."
         )
-        async with AsyncSessionLocal() as session:
-            for i, email in enumerate(senders):
-                if JobManager.is_cancelled(job_id):
-                    await JobManager.update_job_progress(job_id, processed=i, status="cancelled", message="Cancelled.")
-                    return
-                await asyncio.sleep(0.12)
+        for i, email in enumerate(senders):
+            if JobManager.is_cancelled(job_id):
+                await JobManager.update_job_progress(job_id, processed=i, status="cancelled", message="Cancelled.")
+                return
+            await asyncio.sleep(0.12)
+            async with AsyncSessionLocal() as session:
                 sender_rec = await session.get(Sender, email)
                 if sender_rec:
                     if action_type in ["trash", "permanent_delete"]:
                         sender_rec.message_count = 0
                         sender_rec.unread_count = 0
+                        await session.execute(
+                            delete(ScannedMessage).where(ScannedMessage.sender_email == email)
+                        )
                     elif action_type == "read" and is_read:
                         sender_rec.unread_count = 0
-                await JobManager.update_job_progress(
-                    job_id,
-                    processed=i + 1,
-                    total=total_senders,
-                    success_inc=1,
-                    current_item=email,
-                    message=f"Processed {email} ({i + 1}/{total_senders})"
-                )
-            await session.commit()
+                await session.commit()
+
+            await JobManager.update_job_progress(
+                job_id,
+                processed=i + 1,
+                total=total_senders,
+                success_inc=1,
+                current_item=email,
+                message=f"Processed {email} ({i + 1}/{total_senders})"
+            )
 
         await JobManager.update_job_progress(
             job_id,
@@ -82,59 +86,59 @@ async def execute_bulk_action_worker(
     )
 
     try:
-        async with AsyncSessionLocal() as session:
-            for email in senders:
-                if JobManager.is_cancelled(job_id):
-                    await JobManager.update_job_progress(
-                        job_id,
-                        processed=processed_senders,
-                        status="cancelled",
-                        message="Action cancelled by user."
-                    )
-                    return
-
+        for email in senders:
+            if JobManager.is_cancelled(job_id):
                 await JobManager.update_job_progress(
                     job_id,
                     processed=processed_senders,
-                    current_item=email,
-                    message=f"Processing {email} ({processed_senders + 1}/{total_senders})..."
+                    status="cancelled",
+                    message="Action cancelled by user."
                 )
+                return
 
-                # Query messages for this sender
-                query = f"from:{email}"
-                if filter_query:
-                    query += f" {filter_query}"
+            await JobManager.update_job_progress(
+                job_id,
+                processed=processed_senders,
+                current_item=email,
+                message=f"Processing {email} ({processed_senders + 1}/{total_senders})..."
+            )
 
-                message_ids = await gmail.list_message_ids(query=query)
-                email_count = len(message_ids)
+            # Query messages for this sender via Gmail API (outside of DB session)
+            query = f"from:{email}"
+            if filter_query:
+                query += f" {filter_query}"
 
-                if email_count > 0:
-                    if action_type == "trash":
-                        await gmail.batch_modify(message_ids, add_labels=["TRASH"], remove_labels=["INBOX"])
-                    elif action_type == "permanent_delete":
-                        await gmail.batch_delete(message_ids)
-                    elif action_type == "archive":
-                        await gmail.batch_modify(message_ids, remove_labels=["INBOX"])
-                    elif action_type == "read":
-                        if is_read:
-                            await gmail.batch_modify(message_ids, remove_labels=["UNREAD"])
+            message_ids = await gmail.list_message_ids(query=query)
+            email_count = len(message_ids)
+
+            if email_count > 0:
+                if action_type == "trash":
+                    await gmail.batch_modify(message_ids, add_labels=["TRASH"], remove_labels=["INBOX"])
+                elif action_type == "permanent_delete":
+                    await gmail.batch_delete(message_ids)
+                elif action_type == "archive":
+                    await gmail.batch_modify(message_ids, remove_labels=["INBOX"])
+                elif action_type == "read":
+                    if is_read:
+                        await gmail.batch_modify(message_ids, remove_labels=["UNREAD"])
+                    else:
+                        await gmail.batch_modify(message_ids, add_labels=["UNREAD"])
+                elif action_type == "important":
+                    if is_important:
+                        await gmail.batch_modify(message_ids, add_labels=["IMPORTANT"])
+                    else:
+                        await gmail.batch_modify(message_ids, remove_labels=["IMPORTANT"])
+                elif action_type == "label":
+                    if label_id:
+                        if label_action == "apply":
+                            await gmail.batch_modify(message_ids, add_labels=[label_id])
                         else:
-                            await gmail.batch_modify(message_ids, add_labels=["UNREAD"])
-                    elif action_type == "important":
-                        if is_important:
-                            await gmail.batch_modify(message_ids, add_labels=["IMPORTANT"])
-                        else:
-                            await gmail.batch_modify(message_ids, remove_labels=["IMPORTANT"])
-                    elif action_type == "label":
-                        if label_id:
-                            if label_action == "apply":
-                                await gmail.batch_modify(message_ids, add_labels=[label_id])
-                            else:
-                                await gmail.batch_modify(message_ids, remove_labels=[label_id])
+                            await gmail.batch_modify(message_ids, remove_labels=[label_id])
 
-                    total_emails_affected += email_count
+                total_emails_affected += email_count
 
-                # Update database sender stats
+            # Short self-contained DB session committed immediately before updating job
+            async with AsyncSessionLocal() as session:
                 sender_rec = await session.get(Sender, email)
                 if sender_rec:
                     if action_type in ["trash", "permanent_delete"]:
@@ -145,17 +149,16 @@ async def execute_bulk_action_worker(
                         )
                     elif action_type == "read" and is_read:
                         sender_rec.unread_count = 0
+                await session.commit()
 
-                processed_senders += 1
-                await JobManager.update_job_progress(
-                    job_id,
-                    processed=processed_senders,
-                    success_inc=1,
-                    current_item=email,
-                    message=f"Processed {email}: {email_count} emails affected."
-                )
-
-            await session.commit()
+            processed_senders += 1
+            await JobManager.update_job_progress(
+                job_id,
+                processed=processed_senders,
+                success_inc=1,
+                current_item=email,
+                message=f"Processed {email}: {email_count} emails affected."
+            )
 
         await JobManager.update_job_progress(
             job_id,

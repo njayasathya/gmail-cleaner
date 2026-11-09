@@ -72,3 +72,19 @@ def test_safe_parse_internal_date_edge_cases():
     # None and invalid
     assert safe_parse_internal_date(None) is None
     assert safe_parse_internal_date("invalid_string") is None
+
+@pytest.mark.asyncio
+async def test_bulk_action_worker_no_database_lock():
+    from app.routes.action_routes import execute_bulk_action_worker
+    from app.jobs import JobManager
+
+    job = await JobManager.create_job("trash", total_items=3, message="Test action")
+    # Run with multiple senders in demo mode to ensure concurrent sessions don't lock SQLite
+    await execute_bulk_action_worker(
+        job_id=job.id,
+        action_type="trash",
+        senders=["test1@example.com", "test2@example.com", "test3@example.com"]
+    )
+    status = await JobManager.get_job(job.id)
+    assert status.status == "completed"
+    assert status.processed_items == 3
