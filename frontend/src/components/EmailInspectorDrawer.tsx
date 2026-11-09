@@ -22,6 +22,8 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
   const [messages, setMessages] = useState<EmailMessageItem[]>([]);
   const [totalMessages, setTotalMessages] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [page, setPage] = useState<number>(1);
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -29,8 +31,9 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
   const loadMessages = useCallback(async () => {
     if (!sender) return;
     setIsLoading(true);
+    setPage(1);
     try {
-      const res = await fetchSenderMessages(sender.email, 1, 100);
+      const res = await fetchSenderMessages(sender.email, 1, 50);
       setMessages(res.messages);
       setTotalMessages(res.total);
     } catch (err) {
@@ -39,6 +42,22 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
       setIsLoading(false);
     }
   }, [sender]);
+
+  const loadMore = async () => {
+    if (!sender || isLoadingMore || messages.length >= totalMessages) return;
+    setIsLoadingMore(true);
+    try {
+      const nextPage = page + 1;
+      const res = await fetchSenderMessages(sender.email, nextPage, 50);
+      setMessages((prev) => [...prev, ...res.messages]);
+      setPage(nextPage);
+      setTotalMessages(res.total);
+    } catch (err) {
+      console.error('Error loading more messages:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     if (sender) {
@@ -393,6 +412,20 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
               <div className="text-[11px] text-slate-500">
                 {searchFilter ? 'Try clearing your search keyword' : 'No individual emails stored for this sender yet.'}
               </div>
+            </div>
+          )}
+
+          {/* Load More Button */}
+          {messages.length < totalMessages && !searchFilter && !isLoading && (
+            <div className="pt-3 pb-1 text-center">
+              <button
+                onClick={loadMore}
+                disabled={isLoadingMore}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs font-medium text-slate-200 transition inline-flex items-center gap-2 shadow-sm"
+              >
+                {isLoadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" /> : null}
+                <span>Load more ({messages.length} of {totalMessages})</span>
+              </button>
             </div>
           )}
         </div>
