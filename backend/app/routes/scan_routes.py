@@ -465,6 +465,7 @@ async def get_sender_messages(
                 sender_name=m.sender_name or sender_name,
                 subject=m.subject or "(No Subject)",
                 snippet=m.snippet or "",
+                date=m.date,
                 size_estimate=m.size_estimate,
                 label_ids=labels_list,
                 is_unread=is_unread,
