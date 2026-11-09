@@ -280,8 +280,12 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
               return (
                 <div
                   key={msg.id}
-                  className={`pt-2.5 first:pt-0 transition-colors ${
-                    isSelected ? 'bg-indigo-950/20 rounded-lg p-2.5' : ''
+                  className={`py-3 first:pt-0 transition-colors ${
+                    msg.is_unread
+                      ? 'bg-slate-950/60 border-l-2 border-indigo-500 pl-3 pr-2 rounded-r-lg my-1'
+                      : ''
+                  } ${
+                    isSelected ? 'bg-indigo-950/40 rounded-lg p-2.5 border border-indigo-500/30' : ''
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -298,11 +302,14 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
                     </button>
 
                     {/* Email Details */}
-                    <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex-1 min-w-0 space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-wrap">
                           {msg.is_unread && (
-                            <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0" title="Unread" />
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex-shrink-0">
+                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                              <span>UNREAD</span>
+                            </span>
                           )}
                           <a
                             href={msg.gmail_url}
@@ -331,17 +338,28 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
                         </p>
                       )}
 
-                      {/* Labels and Actions Bar */}
-                      <div className="flex items-center justify-between pt-1">
-                        <div className="flex flex-wrap gap-1">
-                          {msg.label_ids.map((lbl) => (
-                            <span
-                              key={lbl}
-                              className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-950 border border-slate-800 text-slate-400"
-                            >
-                              {lbl.replace('CATEGORY_', '').toLowerCase()}
+                      {/* Labels, Date and Actions Bar */}
+                      <div className="flex items-center justify-between pt-1 text-xs">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {msg.date && (
+                            <span className="text-[10px] text-slate-500 font-medium">
+                              {new Date(msg.date).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric'
+                              })}
                             </span>
-                          ))}
+                          )}
+                          <div className="flex flex-wrap gap-1">
+                            {msg.label_ids.map((lbl) => (
+                              <span
+                                key={lbl}
+                                className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-slate-950 border border-slate-800 text-slate-400"
+                              >
+                                {lbl.replace('CATEGORY_', '').toLowerCase()}
+                              </span>
+                            ))}
+                          </div>
                         </div>
 
                         <div className="flex items-center gap-1">

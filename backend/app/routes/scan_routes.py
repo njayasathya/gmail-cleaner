@@ -148,6 +148,9 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                         if lbl.startswith("CATEGORY_"):
                             s["categories"].add(lbl.replace("CATEGORY_", "").lower())
 
+                    internal_ms = msg_data.get("internalDate")
+                    msg_date = datetime.fromtimestamp(int(internal_ms) / 1000) if internal_ms else None
+
                     message_records.append(
                         ScannedMessage(
                             id=mid,
@@ -156,8 +159,9 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                             sender_name=name,
                             subject=subject,
                             snippet=msg_data.get("snippet", ""),
+                            date=msg_date,
                             size_estimate=size_estimate,
-                            label_ids=str(label_ids),
+                            label_ids=json.dumps(label_ids),
                             has_unsubscribe=bool(http_url or mailto_uri),
                             unsubscribe_url=http_url,
                             unsubscribe_mailto=mailto_uri,
@@ -413,6 +417,8 @@ async def get_sender_messages(
                             unsub_post_h = headers.get("list-unsubscribe-post", "")
                             http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_h, unsub_post_h)
                             lbl_ids = msg_data.get("labelIds", [])
+                            internal_ms = msg_data.get("internalDate")
+                            msg_date = datetime.fromtimestamp(int(internal_ms) / 1000) if internal_ms else None
 
                             new_m = ScannedMessage(
                                 id=mid,
@@ -421,6 +427,7 @@ async def get_sender_messages(
                                 sender_name=s_name or sender_name,
                                 subject=subject,
                                 snippet=msg_data.get("snippet", ""),
+                                date=msg_date,
                                 size_estimate=int(msg_data.get("sizeEstimate", 0)),
                                 label_ids=json.dumps(lbl_ids),
                                 has_unsubscribe=bool(http_url or mailto_uri),
@@ -439,9 +446,13 @@ async def get_sender_messages(
 
     # Build response items
     items = []
+    import ast
     for m in cached_messages:
         try:
-            labels_list = json.loads(m.label_ids) if m.label_ids.startswith("[") else []
+            if m.label_ids and m.label_ids.startswith("["):
+                labels_list = ast.literal_eval(m.label_ids) if "'" in m.label_ids else json.loads(m.label_ids)
+            else:
+                labels_list = []
         except Exception:
             labels_list = []
         is_unread = "UNREAD" in labels_list
