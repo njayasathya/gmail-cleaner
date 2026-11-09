@@ -112,12 +112,12 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
             message=f"Found {total_found} emails. Fetching headers..."
         )
 
-        batch_size = 50
+        batch_size = 25
         processed_count = 0
 
         # Temporary aggregations
         sender_aggr: dict = {}
-        message_records: list = []
+        batch_messages: list = []
 
         limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
         async with httpx.AsyncClient(timeout=35.0, limits=limits) as client:
@@ -127,21 +127,19 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                     return
 
                 chunk = message_ids[i:i + batch_size]
-                
-                # High-speed batch fetch via Google Batch API (10x-20x faster)
-                results = await gmail.batch_fetch_messages_metadata(client, chunk)
 
-                # If any messages were throttled, retry only missing ones in a single batch
-                if len(results) < len(chunk):
-                    fetched_ids = {m.get("id") for m in results if m}
-                    missing = [mid for mid in chunk if mid not in fetched_ids]
-                    if missing:
-                        await asyncio.sleep(1.0)
-                        retry_res = await gmail.batch_fetch_messages_metadata(client, missing)
-                        results.extend(retry_res)
+                # Callback for user progress if quota throttles
+                async def on_batch_rate_limit(num_pending: int, delay: float):
+                    await JobManager.update_job_progress(
+                        job_id,
+                        processed=processed_count,
+                        total=total_found,
+                        current_item=f"{len(sender_aggr)} senders discovered",
+                        message=f"Gmail rate limit reached. Pausing {delay:.0f}s for quota window to reset ({num_pending} pending in batch)..."
+                    )
 
-                # Gentle 0.2s pacing between batches of 50 to avoid hitting Google's 250 units/sec quota spike
-                await asyncio.sleep(0.2)
+                # High-speed batch fetch via Google Batch API with sub-request retry
+                results = await gmail.batch_fetch_messages_metadata(client, chunk, on_rate_limit=on_batch_rate_limit)
 
                 for msg_data in results:
                     if not msg_data:
@@ -161,7 +159,10 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
 
                         name, email_addr, domain = gmail.parse_sender_info(from_header)
                         if not email_addr:
-                            continue
+                            email_addr = "unknown@unknown.domain"
+                            name = name or "Unknown Sender"
+                            domain = "unknown.domain"
+
                         if user_email and email_addr.lower() == user_email:
                             continue
 
@@ -196,7 +197,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                         internal_ms = msg_data.get("internalDate")
                         msg_date = safe_parse_internal_date(internal_ms)
 
-                        message_records.append(
+                        batch_messages.append(
                             ScannedMessage(
                                 id=mid,
                                 thread_id=thread_id,
@@ -217,7 +218,24 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                         print(f"Warning: Failed parsing message {msg_data.get('id', 'unknown')}: {err}")
                         continue
 
-                processed_count += len(chunk)
+                processed_count += len(results)
+
+                # Incremental commit to DB every 100 messages
+                if len(batch_messages) >= 100:
+                    async with AsyncSessionLocal() as session:
+                        for m in batch_messages:
+                            m_existing = await session.get(ScannedMessage, m.id)
+                            if not m_existing:
+                                session.add(m)
+                            else:
+                                m_existing.subject = m.subject
+                                m_existing.snippet = m.snippet
+                                m_existing.date = m.date
+                                m_existing.size_estimate = m.size_estimate
+                                m_existing.label_ids = m.label_ids
+                        await session.commit()
+                    batch_messages.clear()
+
                 await JobManager.update_job_progress(
                     job_id,
                     processed=processed_count,
@@ -226,8 +244,24 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                     message=f"Processed {processed_count} of {total_found} emails..."
                 )
 
-        # Commit aggregated senders & messages to DB
+                # Gentle pacing between batches of 25 (0.5s) to stay within Google's 6,000 units/min per-user quota
+                await asyncio.sleep(0.5)
+
+        # Final commit for remaining messages and senders
         async with AsyncSessionLocal() as session:
+            if batch_messages:
+                for m in batch_messages:
+                    m_existing = await session.get(ScannedMessage, m.id)
+                    if not m_existing:
+                        session.add(m)
+                    else:
+                        m_existing.subject = m.subject
+                        m_existing.snippet = m.snippet
+                        m_existing.date = m.date
+                        m_existing.size_estimate = m.size_estimate
+                        m_existing.label_ids = m.label_ids
+
+            # Upsert Senders
             for email_addr, data in sender_aggr.items():
                 existing = await session.get(Sender, email_addr)
                 cats_str = ",".join(sorted(list(data["categories"])))
@@ -264,24 +298,34 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                     )
                     session.add(new_sender)
 
-            # Insert or update messages (ignore duplicates)
-            for m in message_records[:10000]:  # Support up to 10000 stored individual messages
-                m_existing = await session.get(ScannedMessage, m.id)
-                if not m_existing:
-                    session.add(m)
-                else:
-                    m_existing.subject = m.subject
-                    m_existing.snippet = m.snippet
-                    m_existing.date = m.date
-                    m_existing.size_estimate = m.size_estimate
-                    m_existing.label_ids = m.label_ids
+            await session.commit()
+
+            # Recalculate sender message counts from scanned_messages to ensure 100% database consistency
+            cnt_query = select(
+                ScannedMessage.sender_email,
+                func.count(ScannedMessage.id),
+                func.sum(case((ScannedMessage.label_ids.like('%"UNREAD"%'), 1), else_=0)),
+                func.sum(ScannedMessage.size_estimate)
+            ).group_by(ScannedMessage.sender_email)
+            
+            cnt_res = await session.execute(cnt_query)
+            for s_email, m_cnt, u_cnt, s_bytes in cnt_res.all():
+                s_obj = await session.get(Sender, s_email)
+                if s_obj:
+                    s_obj.message_count = m_cnt
+                    s_obj.unread_count = u_cnt or 0
+                    s_obj.total_size_bytes = s_bytes or 0
+
+            # Count total cataloged emails
+            total_cataloged_res = await session.execute(select(func.count(ScannedMessage.id)))
+            total_cataloged = total_cataloged_res.scalar() or processed_count
 
             # Update UserSession scan stats
             sess_res = await session.execute(select(UserSession).where(UserSession.is_active == True))
             u_sess = sess_res.scalar_one_or_none()
             if u_sess:
                 u_sess.last_scan_at = datetime.utcnow()
-                u_sess.total_scanned_emails = total_found
+                u_sess.total_scanned_emails = total_cataloged
 
             await session.commit()
 
@@ -290,7 +334,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
             processed=total_found,
             total=total_found,
             status="completed",
-            message=f"Scan complete! Discovered {len(sender_aggr)} unique senders across {total_found} emails."
+            message=f"Scan complete! Discovered {len(sender_aggr)} unique senders across {total_cataloged} cataloged emails."
         )
 
     except Exception as e:

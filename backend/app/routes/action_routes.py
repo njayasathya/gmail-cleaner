@@ -2,7 +2,7 @@ import asyncio
 from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from ..database import get_db, AsyncSessionLocal
 from ..models import Sender, ScannedMessage
 from ..schemas import (
@@ -140,6 +140,9 @@ async def execute_bulk_action_worker(
                     if action_type in ["trash", "permanent_delete"]:
                         sender_rec.message_count = max(0, sender_rec.message_count - email_count)
                         sender_rec.unread_count = 0
+                        await session.execute(
+                            delete(ScannedMessage).where(ScannedMessage.sender_email == email)
+                        )
                     elif action_type == "read" and is_read:
                         sender_rec.unread_count = 0
 
