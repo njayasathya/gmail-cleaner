@@ -1,16 +1,18 @@
 import React, { useState } from 'react';
-import { RefreshCw, X, Zap, Layers, HardDrive, Search } from 'lucide-react';
+import { RefreshCw, X, Zap, Layers, HardDrive, Search, Trash2 } from 'lucide-react';
 
 interface ScanModalProps {
   isOpen: boolean;
   onClose: () => void;
   onStartScan: (query: string, maxEmails: number) => void;
+  onResetDatabase?: () => Promise<void>;
 }
 
 export const ScanModal: React.FC<ScanModalProps> = ({
   isOpen,
   onClose,
-  onStartScan
+  onStartScan,
+  onResetDatabase
 }) => {
   const [scanDepth, setScanDepth] = useState<number>(1000);
   const [targetCategory, setTargetCategory] = useState<string>('');
@@ -137,22 +139,41 @@ export const ScanModal: React.FC<ScanModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="flex gap-2 pt-2 border-t border-slate-800">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleScan}
-            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition shadow-lg shadow-indigo-600/30"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Start Scanning ({scanDepth.toLocaleString()} emails)</span>
-          </button>
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
+          {onResetDatabase ? (
+            <button
+              type="button"
+              onClick={async () => {
+                if (confirm('Clear the cached scan results from the database?')) {
+                  await onResetDatabase();
+                  onClose();
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800 text-xs transition"
+              title="Clear all cached senders to start completely fresh"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Reset Cache</span>
+            </button>
+          ) : <div />}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleScan}
+              className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition shadow-lg shadow-indigo-600/30"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Start Scanning ({scanDepth.toLocaleString()} emails)</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

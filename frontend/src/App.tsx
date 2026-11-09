@@ -14,7 +14,8 @@ import {
   triggerScan, bulkTrash, bulkPermanentDelete, bulkArchive,
   bulkMarkRead, bulkMarkImportant, bulkApplyLabel, unsubscribeSingle,
   unsubscribeBulk, createLabel, deleteLabel, cancelJob,
-  streamJob, fetchLoginUrl, logout, saveCredentials, seedDemoData
+  streamJob, fetchLoginUrl, logout, saveCredentials, seedDemoData,
+  resetScanDatabase
 } from './services/api';
 
 import {
@@ -277,6 +278,18 @@ export const App: React.FC = () => {
     await loadNewsletters();
   };
 
+  const handleResetDatabase = async () => {
+    try {
+      await resetScanDatabase();
+      await loadAuthAndStats();
+      await loadSenders();
+      await loadNewsletters();
+      setSelectedEmails([]);
+    } catch (err: any) {
+      alert(err.message || 'Failed to reset database');
+    }
+  };
+
   // Selection handlers
   const handleToggleSelect = (email: string) => {
     setSelectedEmails((prev) =>
@@ -422,6 +435,7 @@ export const App: React.FC = () => {
         isOpen={isScanModalOpen}
         onClose={() => setIsScanModalOpen(false)}
         onStartScan={handleScan}
+        onResetDatabase={handleResetDatabase}
       />
 
       <SmartFilterModal

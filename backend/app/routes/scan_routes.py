@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, asc, or_, case
+from sqlalchemy import select, func, desc, asc, or_, case, delete
 import httpx
 from ..database import get_db, AsyncSessionLocal
 from ..models import Sender, ScannedMessage, UserSession
@@ -345,3 +345,13 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         is_authenticated=is_authenticated(),
         last_scan_at=user_sess.last_scan_at if user_sess else None
     )
+
+@router.post("/scan/reset")
+async def reset_scan_database(db: AsyncSession = Depends(get_db)):
+    """
+    Clears all scanned senders and messages from the local SQLite cache so you can perform a fresh sweep.
+    """
+    await db.execute(delete(ScannedMessage))
+    await db.execute(delete(Sender))
+    await db.commit()
+    return {"status": "cleared"}

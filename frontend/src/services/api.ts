@@ -88,6 +88,11 @@ export async function triggerScan(query: string = '', maxEmails: number = 1000):
   return res.json();
 }
 
+export async function resetScanDatabase(): Promise<void> {
+  const res = await fetch(`${API_BASE}/scan/reset`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to reset scan database');
+}
+
 export async function bulkTrash(senders: string[], filterQuery?: string): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/actions/trash`, {
     method: 'POST',
