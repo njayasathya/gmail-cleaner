@@ -8,6 +8,7 @@ import { LabelManagerModal } from './components/LabelManagerModal';
 import { JobProgressModal } from './components/JobProgressModal';
 import { SettingsModal } from './components/SettingsModal';
 import { ScanModal } from './components/ScanModal';
+import { EmailInspectorDrawer } from './components/EmailInspectorDrawer';
 
 import {
   fetchAuthStatus, fetchStats, fetchSenders, fetchLabels,
@@ -58,7 +59,8 @@ export const App: React.FC = () => {
   // Selections
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
 
-  // Modals
+  // Modals & Drawers
+  const [inspectingSender, setInspectingSender] = useState<Sender | null>(null);
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [isSmartFilterOpen, setIsSmartFilterOpen] = useState(false);
   const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
@@ -364,6 +366,7 @@ export const App: React.FC = () => {
             onBulkMarkImportant={handleBulkMarkImportant}
             onBulkLabel={handleBulkLabel}
             onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
+            onInspectSender={setInspectingSender}
             availableLabels={labels}
           />
         )}
@@ -424,6 +427,7 @@ export const App: React.FC = () => {
               onBulkMarkImportant={handleBulkMarkImportant}
               onBulkLabel={handleBulkLabel}
               onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
+              onInspectSender={setInspectingSender}
               availableLabels={labels}
             />
           </div>
@@ -473,6 +477,15 @@ export const App: React.FC = () => {
         job={activeJob}
         onCancel={(id) => cancelJob(id)}
         onClose={() => setActiveJob(null)}
+      />
+
+      <EmailInspectorDrawer
+        sender={inspectingSender}
+        onClose={() => setInspectingSender(null)}
+        onMessagesModified={() => {
+          loadAuthAndStats();
+          loadSenders();
+        }}
       />
     </div>
   );

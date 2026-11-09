@@ -4,7 +4,8 @@ import {
   AuthStatus,
   JobProgress,
   LabelInfo,
-  UnsubscribeResult
+  UnsubscribeResult,
+  SenderMessagesResponse
 } from '../types';
 
 const API_BASE = '/api';
@@ -201,6 +202,39 @@ export async function createLabel(name: string): Promise<LabelInfo> {
 export async function deleteLabel(labelId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/labels/${labelId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete label');
+}
+
+export async function fetchSenderMessages(email: string, page = 1, pageSize = 50): Promise<SenderMessagesResponse> {
+  const res = await fetch(`${API_BASE}/sender-messages?email=${encodeURIComponent(email)}&page=${page}&page_size=${pageSize}`);
+  if (!res.ok) throw new Error('Failed to fetch messages for sender');
+  return res.json();
+}
+
+export async function trashSpecificMessages(messageIds: string[]): Promise<void> {
+  const res = await fetch(`${API_BASE}/messages/trash`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message_ids: messageIds })
+  });
+  if (!res.ok) throw new Error('Failed to trash messages');
+}
+
+export async function deleteSpecificMessages(messageIds: string[]): Promise<void> {
+  const res = await fetch(`${API_BASE}/messages/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message_ids: messageIds })
+  });
+  if (!res.ok) throw new Error('Failed to delete messages');
+}
+
+export async function markReadSpecificMessages(messageIds: string[], read = true): Promise<void> {
+  const res = await fetch(`${API_BASE}/messages/read?read=${read}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message_ids: messageIds })
+  });
+  if (!res.ok) throw new Error('Failed to update read status');
 }
 
 export function getExportCsvUrl(senders?: string[]): string {

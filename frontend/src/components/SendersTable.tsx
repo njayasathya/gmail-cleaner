@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Search, Trash2, Archive, CheckSquare, Square, Mail,
   MailCheck, Download, Tag, Star, ChevronLeft, ChevronRight,
-  ExternalLink, BellOff, ArrowUpDown, Filter, AlertTriangle
+  ExternalLink, BellOff, ArrowUpDown, Filter, AlertTriangle, Eye
 } from 'lucide-react';
 import { Sender, LabelInfo } from '../types';
 import { getExportCsvUrl } from '../services/api';
@@ -31,6 +31,7 @@ interface SendersTableProps {
   onBulkMarkImportant: (emails: string[], important: boolean) => void;
   onBulkLabel: (emails: string[], labelId: string, action: 'apply' | 'remove') => void;
   onUnsubscribeSingle: (email: string) => void;
+  onInspectSender: (sender: Sender) => void;
   availableLabels: LabelInfo[];
 }
 
@@ -58,6 +59,7 @@ export const SendersTable: React.FC<SendersTableProps> = ({
   onBulkMarkImportant,
   onBulkLabel,
   onUnsubscribeSingle,
+  onInspectSender,
   availableLabels
 }) => {
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
@@ -355,7 +357,11 @@ export const SendersTable: React.FC<SendersTableProps> = ({
                           </div>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-semibold text-slate-100 truncate max-w-[220px]" title={sender.name}>
+                              <span
+                                onClick={() => onInspectSender(sender)}
+                                className="font-semibold text-slate-100 truncate max-w-[220px] cursor-pointer hover:text-indigo-400 hover:underline transition"
+                                title="Click to view & inspect individual emails"
+                              >
                                 {sender.name || sender.email}
                               </span>
                               {sender.domain && (
@@ -449,6 +455,15 @@ export const SendersTable: React.FC<SendersTableProps> = ({
                               <span>Unsub</span>
                             </button>
                           )}
+
+                          {/* Inspect individual emails */}
+                          <button
+                            onClick={() => onInspectSender(sender)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition"
+                            title="View & inspect individual emails from this sender"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
 
                           {/* Quick Trash */}
                           <button

@@ -7,7 +7,10 @@ from sqlalchemy import select, func, desc, asc, or_, case, delete
 import httpx
 from ..database import get_db, AsyncSessionLocal
 from ..models import Sender, ScannedMessage, UserSession
-from ..schemas import SenderListResponse, SenderResponse, StatsResponse
+from ..schemas import (
+    SenderListResponse, SenderResponse, StatsResponse,
+    SenderMessagesResponse, EmailMessageItem, IndividualMessageActionRequest
+)
 from ..gmail_service import GmailService
 from ..jobs import JobManager
 from ..auth import is_authenticated
@@ -361,3 +364,145 @@ async def reset_scan_database(db: AsyncSession = Depends(get_db)):
         user_sess.last_scan_at = None
     await db.commit()
     return {"status": "cleared"}
+
+@router.get("/sender-messages", response_model=SenderMessagesResponse)
+async def get_sender_messages(
+    email: str = Query(..., description="Sender email address"),
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100)
+):
+    import json
+    clean_email = email.strip().lower()
+    sender = await db.get(Sender, clean_email)
+    sender_name = sender.name if sender else clean_email
+
+    # Query cached messages in SQLite
+    stmt = (
+        select(ScannedMessage)
+        .where(ScannedMessage.sender_email == clean_email)
+        .order_by(ScannedMessage.id.desc())
+    )
+    result = await db.execute(stmt)
+    cached_messages = result.scalars().all()
+
+    # If few cached messages and user is authenticated, fetch live messages from Gmail
+    if len(cached_messages) < 10 and is_authenticated():
+        try:
+            gmail = GmailService()
+            msg_ids = await gmail.list_message_ids(query=f"from:{clean_email}", max_results=30)
+            if msg_ids:
+                semaphore = asyncio.Semaphore(15)
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    async def fetch_meta(mid):
+                        async with semaphore:
+                            return await gmail.fetch_message_metadata(client, mid)
+                    raw_results = await asyncio.gather(*[fetch_meta(mid) for mid in msg_ids])
+
+                    for msg_data in raw_results:
+                        if not msg_data:
+                            continue
+                        mid = msg_data.get("id")
+                        existing = await db.get(ScannedMessage, mid)
+                        if not existing:
+                            headers = {h["name"].lower(): h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
+                            from_h = headers.get("from", "")
+                            s_name, s_email, _ = gmail.parse_sender_info(from_h)
+                            subject = headers.get("subject", "(No Subject)")
+                            unsub_h = headers.get("list-unsubscribe", "")
+                            unsub_post_h = headers.get("list-unsubscribe-post", "")
+                            http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_h, unsub_post_h)
+                            lbl_ids = msg_data.get("labelIds", [])
+
+                            new_m = ScannedMessage(
+                                id=mid,
+                                thread_id=msg_data.get("threadId", mid),
+                                sender_email=clean_email,
+                                sender_name=s_name or sender_name,
+                                subject=subject,
+                                snippet=msg_data.get("snippet", ""),
+                                size_estimate=int(msg_data.get("sizeEstimate", 0)),
+                                label_ids=json.dumps(lbl_ids),
+                                has_unsubscribe=bool(http_url or mailto_uri),
+                                unsubscribe_url=http_url,
+                                unsubscribe_mailto=mailto_uri,
+                                has_one_click=has_one_click
+                            )
+                            db.add(new_m)
+                    await db.commit()
+
+                # Re-query
+                res2 = await db.execute(stmt)
+                cached_messages = res2.scalars().all()
+        except Exception as e:
+            print(f"Error fetching live messages for {clean_email}: {e}")
+
+    # Build response items
+    items = []
+    for m in cached_messages:
+        try:
+            labels_list = json.loads(m.label_ids) if m.label_ids.startswith("[") else []
+        except Exception:
+            labels_list = []
+        is_unread = "UNREAD" in labels_list
+
+        items.append(
+            EmailMessageItem(
+                id=m.id,
+                thread_id=m.thread_id or m.id,
+                sender_email=m.sender_email,
+                sender_name=m.sender_name or sender_name,
+                subject=m.subject or "(No Subject)",
+                snippet=m.snippet or "",
+                size_estimate=m.size_estimate,
+                label_ids=labels_list,
+                is_unread=is_unread,
+                has_unsubscribe=m.has_unsubscribe,
+                gmail_url=f"https://mail.google.com/mail/u/0/#all/{m.thread_id or m.id}"
+            )
+        )
+
+    # Slice for pagination
+    start = (page - 1) * page_size
+    paged_items = items[start:start + page_size]
+
+    return SenderMessagesResponse(
+        sender_email=clean_email,
+        sender_name=sender_name,
+        total=len(items),
+        messages=paged_items
+    )
+
+@router.post("/messages/trash")
+async def trash_specific_messages(req: IndividualMessageActionRequest, db: AsyncSession = Depends(get_db)):
+    if not req.message_ids:
+        return {"count": 0}
+    if is_authenticated():
+        gmail = GmailService()
+        await gmail.batch_modify(req.message_ids, add_labels=["TRASH"], remove_labels=["INBOX"])
+    await db.execute(delete(ScannedMessage).where(ScannedMessage.id.in_(req.message_ids)))
+    await db.commit()
+    return {"status": "trashed", "count": len(req.message_ids)}
+
+@router.post("/messages/delete")
+async def delete_specific_messages(req: IndividualMessageActionRequest, db: AsyncSession = Depends(get_db)):
+    if not req.message_ids:
+        return {"count": 0}
+    if is_authenticated():
+        gmail = GmailService()
+        await gmail.batch_delete(req.message_ids)
+    await db.execute(delete(ScannedMessage).where(ScannedMessage.id.in_(req.message_ids)))
+    await db.commit()
+    return {"status": "permanently_deleted", "count": len(req.message_ids)}
+
+@router.post("/messages/read")
+async def mark_read_specific_messages(req: IndividualMessageActionRequest, read: bool = True, db: AsyncSession = Depends(get_db)):
+    if not req.message_ids:
+        return {"count": 0}
+    if is_authenticated():
+        gmail = GmailService()
+        if read:
+            await gmail.batch_modify(req.message_ids, remove_labels=["UNREAD"])
+        else:
+            await gmail.batch_modify(req.message_ids, add_labels=["UNREAD"])
+    return {"status": "updated", "count": len(req.message_ids)}

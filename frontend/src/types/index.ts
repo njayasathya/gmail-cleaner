@@ -82,6 +82,28 @@ export interface SmartFilter {
   recommended_action: string;
 }
 
+export interface EmailMessageItem {
+  id: string;
+  thread_id: string;
+  sender_email: string;
+  sender_name: string;
+  subject: string;
+  snippet: string;
+  date?: string | null;
+  size_estimate: number;
+  label_ids: string[];
+  is_unread: boolean;
+  has_unsubscribe: boolean;
+  gmail_url: string;
+}
+
+export interface SenderMessagesResponse {
+  sender_email: string;
+  sender_name: string;
+  total: number;
+  messages: EmailMessageItem[];
+}
+
 export interface UnsubscribeResult {
   email: string;
   status: 'success' | 'failed' | 'manual_required';

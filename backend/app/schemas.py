@@ -28,6 +28,32 @@ class SenderListResponse(BaseModel):
     page_size: int
     senders: List[SenderResponse]
 
+class EmailMessageItem(BaseModel):
+    id: str
+    thread_id: str
+    sender_email: str
+    sender_name: str
+    subject: str
+    snippet: str
+    date: Optional[datetime] = None
+    size_estimate: int = 0
+    label_ids: List[str] = []
+    is_unread: bool = False
+    has_unsubscribe: bool = False
+    gmail_url: str = ""
+
+    class Config:
+        from_attributes = True
+
+class SenderMessagesResponse(BaseModel):
+    sender_email: str
+    sender_name: str
+    total: int
+    messages: List[EmailMessageItem]
+
+class IndividualMessageActionRequest(BaseModel):
+    message_ids: List[str]
+
 class StatsResponse(BaseModel):
     total_senders: int
     total_emails: int
