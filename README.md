@@ -19,6 +19,7 @@ A modern, desktop-grade Gmail cleaner and newsletter unsubscribe engine packaged
 | **Mark / Unmark Important** | Bulk-flag high-priority senders or strip the `IMPORTANT` badge from noisy senders. |
 | **Email Metadata CSV Export** | Export email metadata (Sender, Subject, Size, Date, Labels, Snippet) as a CSV report. |
 | **Smart Filters & Cleanup Recipes** | Visual query builder for date ranges (`older_than:90d`), file size thresholds (`larger:10M`), and categories (`Promotions`, `Social`, `Updates`, `Forums`). |
+| **Email Inspector Drawer** | Click any sender to inspect individual messages, view unread badges, formatted dates, snippets, and jump directly to the message in Gmail. |
 | **Persistent Local Storage** | Scanned sender metadata and OAuth tokens are cached locally in SQLite on a Docker volume so your inbox loads instantly. |
 
 ---
@@ -36,6 +37,7 @@ cp .env.example .env
 ```bash
 docker compose up -d
 ```
+*Or simply double-click **`start-docker.bat`** on Windows or run **`./start.sh`** on Linux/macOS!*
 
 Open your browser and navigate to:
 👉 **[http://localhost:8000](http://localhost:8000)**
