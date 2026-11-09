@@ -67,6 +67,7 @@ class GmailService:
             ("metadataHeaders", "Date"),
             ("metadataHeaders", "List-Unsubscribe"),
             ("metadataHeaders", "List-Unsubscribe-Post"),
+            ("fields", "id,threadId,labelIds,sizeEstimate,internalDate,snippet,payload/headers"),
         ]
         headers = self._get_headers()
         

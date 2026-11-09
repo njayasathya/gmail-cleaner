@@ -112,15 +112,16 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
             message=f"Found {total_found} emails. Fetching headers..."
         )
 
-        batch_size = 25
+        batch_size = 50
         processed_count = 0
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(25)
 
         # Temporary aggregations
         sender_aggr: dict = {}
         message_records: list = []
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
+        async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
             for i in range(0, total_found, batch_size):
                 if JobManager.is_cancelled(job_id):
                     await JobManager.update_job_progress(job_id, processed=processed_count, status="cancelled", message="Scan cancelled by user.")
@@ -133,7 +134,6 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                         return await gmail.fetch_message_metadata(client, mid)
 
                 results = await asyncio.gather(*[fetch_meta(mid) for mid in chunk])
-                await asyncio.sleep(0.8)
 
                 for msg_data in results:
                     if not msg_data:
