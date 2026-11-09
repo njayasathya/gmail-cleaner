@@ -1,4 +1,6 @@
 import asyncio
+import json
+import ast
 from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
@@ -446,7 +448,6 @@ async def get_sender_messages(
 
     # Build response items
     items = []
-    import ast
     for m in cached_messages:
         try:
             if m.label_ids and m.label_ids.startswith("["):
