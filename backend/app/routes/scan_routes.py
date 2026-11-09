@@ -353,5 +353,11 @@ async def reset_scan_database(db: AsyncSession = Depends(get_db)):
     """
     await db.execute(delete(ScannedMessage))
     await db.execute(delete(Sender))
+    sess_res = await db.execute(select(UserSession).where(UserSession.is_active == True))
+    user_sess = sess_res.scalar_one_or_none()
+    if user_sess:
+        user_sess.total_scanned_emails = 0
+        user_sess.total_freed_bytes = 0
+        user_sess.last_scan_at = None
     await db.commit()
     return {"status": "cleared"}
