@@ -1,4 +1,7 @@
 import os
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI

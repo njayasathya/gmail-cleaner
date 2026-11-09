@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     
     # Scopes needed for bulk scanning, modifying labels, trashing, permanent delete, and unsubscribe mailto
     SCOPES: list[str] = [
+        "openid",
         "https://mail.google.com/",
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",

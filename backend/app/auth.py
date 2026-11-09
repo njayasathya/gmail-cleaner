@@ -1,6 +1,11 @@
 import json
 import os
 from pathlib import Path
+
+# Allow oauthlib to accept additional scopes returned by Google (e.g. openid) without throwing ScopeChangeError
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
 from typing import Optional, Dict, Any
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
