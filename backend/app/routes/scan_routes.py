@@ -1,8 +1,8 @@
 import asyncio
 import json
 import ast
-from datetime import datetime
-from typing import Optional, List
+from datetime import datetime, timedelta
+from typing import Optional, List, Any
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, asc, or_, case, delete
@@ -18,6 +18,24 @@ from ..jobs import JobManager
 from ..auth import is_authenticated
 
 router = APIRouter(prefix="", tags=["scan & senders"])
+
+def safe_parse_internal_date(internal_ms: Any) -> Optional[datetime]:
+    """
+    Safely converts Gmail internalDate (milliseconds since epoch) to a datetime object.
+    Uses UTC delta to avoid Windows C-runtime OSError([Errno 22] Invalid argument)
+    for negative, zero, or edge-case historical timestamps.
+    """
+    if not internal_ms:
+        return None
+    try:
+        ts = float(internal_ms) / 1000.0
+        if ts < -62135596800:
+            return datetime(1970, 1, 1)
+        if ts > 253402300799:
+            return datetime(2099, 12, 31)
+        return datetime(1970, 1, 1) + timedelta(seconds=ts)
+    except Exception:
+        return None
 
 async def run_scan_worker(job_id: str, query: str, max_emails: int):
     if not is_authenticated():
@@ -120,74 +138,76 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                 for msg_data in results:
                     if not msg_data:
                         continue
-                    
-                    mid = msg_data.get("id")
-                    thread_id = msg_data.get("threadId", "")
-                    size_estimate = int(msg_data.get("sizeEstimate", 0))
-                    label_ids = msg_data.get("labelIds", [])
-                    is_unread = "UNREAD" in label_ids
+                    try:
+                        mid = msg_data.get("id")
+                        thread_id = msg_data.get("threadId", "")
+                        size_estimate = int(msg_data.get("sizeEstimate", 0))
+                        label_ids = msg_data.get("labelIds", [])
+                        is_unread = "UNREAD" in label_ids
 
-                    headers = {h["name"].lower(): h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
-                    from_header = headers.get("from", "")
-                    subject = headers.get("subject", "(No Subject)")
-                    date_header = headers.get("date", "")
-                    unsub_header = headers.get("list-unsubscribe", "")
-                    unsub_post_header = headers.get("list-unsubscribe-post", "")
+                        headers = {h["name"].lower(): h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
+                        from_header = headers.get("from", "")
+                        subject = headers.get("subject", "(No Subject)")
+                        unsub_header = headers.get("list-unsubscribe", "")
+                        unsub_post_header = headers.get("list-unsubscribe-post", "")
 
-                    name, email_addr, domain = gmail.parse_sender_info(from_header)
-                    if not email_addr:
-                        continue
-                    if user_email and email_addr.lower() == user_email:
-                        continue
+                        name, email_addr, domain = gmail.parse_sender_info(from_header)
+                        if not email_addr:
+                            continue
+                        if user_email and email_addr.lower() == user_email:
+                            continue
 
-                    http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_header, unsub_post_header)
+                        http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_header, unsub_post_header)
 
-                    if email_addr not in sender_aggr:
-                        sender_aggr[email_addr] = {
-                            "name": name,
-                            "domain": domain,
-                            "count": 0,
-                            "unread_count": 0,
-                            "size": 0,
-                            "has_unsub": bool(http_url or mailto_uri),
-                            "unsub_url": http_url,
-                            "unsub_mailto": mailto_uri,
-                            "has_one_click": has_one_click,
-                            "sample_subject": subject,
-                            "categories": set()
-                        }
+                        if email_addr not in sender_aggr:
+                            sender_aggr[email_addr] = {
+                                "name": name,
+                                "domain": domain,
+                                "count": 0,
+                                "unread_count": 0,
+                                "size": 0,
+                                "has_unsub": bool(http_url or mailto_uri),
+                                "unsub_url": http_url,
+                                "unsub_mailto": mailto_uri,
+                                "has_one_click": has_one_click,
+                                "sample_subject": subject,
+                                "categories": set()
+                            }
 
-                    s = sender_aggr[email_addr]
-                    s["count"] += 1
-                    if is_unread:
-                        s["unread_count"] += 1
-                    s["size"] += size_estimate
+                        s = sender_aggr[email_addr]
+                        s["count"] += 1
+                        if is_unread:
+                            s["unread_count"] += 1
+                        s["size"] += size_estimate
 
-                    # Check labels for categories
-                    for lbl in label_ids:
-                        if lbl.startswith("CATEGORY_"):
-                            s["categories"].add(lbl.replace("CATEGORY_", "").lower())
+                        # Check labels for categories
+                        for lbl in label_ids:
+                            if lbl.startswith("CATEGORY_"):
+                                s["categories"].add(lbl.replace("CATEGORY_", "").lower())
 
-                    internal_ms = msg_data.get("internalDate")
-                    msg_date = datetime.fromtimestamp(int(internal_ms) / 1000) if internal_ms else None
+                        internal_ms = msg_data.get("internalDate")
+                        msg_date = safe_parse_internal_date(internal_ms)
 
-                    message_records.append(
-                        ScannedMessage(
-                            id=mid,
-                            thread_id=thread_id,
-                            sender_email=email_addr,
-                            sender_name=name,
-                            subject=subject,
-                            snippet=msg_data.get("snippet", ""),
-                            date=msg_date,
-                            size_estimate=size_estimate,
-                            label_ids=json.dumps(label_ids),
-                            has_unsubscribe=bool(http_url or mailto_uri),
-                            unsubscribe_url=http_url,
-                            unsubscribe_mailto=mailto_uri,
-                            has_one_click=has_one_click
+                        message_records.append(
+                            ScannedMessage(
+                                id=mid,
+                                thread_id=thread_id,
+                                sender_email=email_addr,
+                                sender_name=name,
+                                subject=subject,
+                                snippet=msg_data.get("snippet", ""),
+                                date=msg_date,
+                                size_estimate=size_estimate,
+                                label_ids=json.dumps(label_ids),
+                                has_unsubscribe=bool(http_url or mailto_uri),
+                                unsubscribe_url=http_url,
+                                unsubscribe_mailto=mailto_uri,
+                                has_one_click=has_one_click
+                            )
                         )
-                    )
+                    except Exception as err:
+                        print(f"Warning: Failed parsing message {msg_data.get('id', 'unknown')}: {err}")
+                        continue
 
                 processed_count += len(chunk)
                 await JobManager.update_job_progress(
@@ -237,7 +257,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                     session.add(new_sender)
 
             # Insert or update messages (ignore duplicates)
-            for m in message_records[:5000]:  # Cap stored individual messages to 5000
+            for m in message_records[:10000]:  # Support up to 10000 stored individual messages
                 m_existing = await session.get(ScannedMessage, m.id)
                 if not m_existing:
                     session.add(m)
@@ -448,7 +468,7 @@ async def get_sender_messages(
                             http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_h, unsub_post_h)
                             lbl_ids = msg_data.get("labelIds", [])
                             internal_ms = msg_data.get("internalDate")
-                            msg_date = datetime.fromtimestamp(int(internal_ms) / 1000) if internal_ms else None
+                            msg_date = safe_parse_internal_date(internal_ms)
 
                             new_m = ScannedMessage(
                                 id=mid,

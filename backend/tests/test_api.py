@@ -49,3 +49,26 @@ async def test_export_csv():
         assert "text/csv" in resp.headers.get("content-type", "")
         assert "Sender Email" in resp.text
         assert "Subject" in resp.text
+
+def test_safe_parse_internal_date_edge_cases():
+    from app.routes.scan_routes import safe_parse_internal_date
+    from datetime import datetime
+
+    # Negative timestamps (pre-1970) that crash Windows fromtimestamp with [Errno 22]
+    d1 = safe_parse_internal_date(-1000)
+    assert d1 is not None
+    assert d1.year == 1969
+
+    # Astronomical or corrupt values
+    d2 = safe_parse_internal_date(999999999999999999)
+    assert d2 is not None
+    assert d2.year == 2099
+
+    # Standard timestamp
+    d3 = safe_parse_internal_date(1794186932000)
+    assert d3 is not None
+    assert d3.year == 2026
+
+    # None and invalid
+    assert safe_parse_internal_date(None) is None
+    assert safe_parse_internal_date("invalid_string") is None
