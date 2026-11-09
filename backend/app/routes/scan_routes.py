@@ -346,7 +346,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         last_scan_at=user_sess.last_scan_at if user_sess else None
     )
 
-@router.post("/scan/reset")
+@router.api_route("/scan/reset", methods=["GET", "POST"])
 async def reset_scan_database(db: AsyncSession = Depends(get_db)):
     """
     Clears all scanned senders and messages from the local SQLite cache so you can perform a fresh sweep.
