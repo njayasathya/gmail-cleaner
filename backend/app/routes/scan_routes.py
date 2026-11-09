@@ -51,6 +51,21 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
 
     gmail = GmailService()
     try:
+        # Default query targets incoming mail, excluding user's own sent emails and drafts
+        effective_query = query.strip()
+        if not effective_query:
+            effective_query = "-in:sent -in:draft"
+        elif effective_query.lower() in ["all", "in:all"]:
+            effective_query = ""
+
+        # Fetch active user's email to avoid treating the user as their own spam sender
+        user_email = ""
+        async with AsyncSessionLocal() as session:
+            sess_res = await session.execute(select(UserSession).where(UserSession.is_active == True))
+            u_sess = sess_res.scalar_one_or_none()
+            if u_sess and u_sess.email:
+                user_email = u_sess.email.strip().lower()
+
         await JobManager.update_job_progress(
             job_id,
             processed=0,
@@ -59,7 +74,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
             message="Connecting to Gmail and fetching email list..."
         )
 
-        message_ids = await gmail.list_message_ids(query=query, max_results=max_emails)
+        message_ids = await gmail.list_message_ids(query=effective_query, max_results=max_emails)
         total_found = len(message_ids)
 
         if total_found == 0:
@@ -79,9 +94,9 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
             message=f"Found {total_found} emails. Fetching headers..."
         )
 
-        batch_size = 50
+        batch_size = 25
         processed_count = 0
-        semaphore = asyncio.Semaphore(20)
+        semaphore = asyncio.Semaphore(5)
 
         # Temporary aggregations
         sender_aggr: dict = {}
@@ -100,6 +115,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                         return await gmail.fetch_message_metadata(client, mid)
 
                 results = await asyncio.gather(*[fetch_meta(mid) for mid in chunk])
+                await asyncio.sleep(0.8)
 
                 for msg_data in results:
                     if not msg_data:
@@ -120,6 +136,8 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
 
                     name, email_addr, domain = gmail.parse_sender_info(from_header)
                     if not email_addr:
+                        continue
+                    if user_email and email_addr.lower() == user_email:
                         continue
 
                     http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_header, unsub_post_header)
@@ -186,14 +204,18 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                 existing = await session.get(Sender, email_addr)
                 cats_str = ",".join(sorted(list(data["categories"])))
                 if existing:
-                    existing.message_count += data["count"]
-                    existing.unread_count += data["unread_count"]
-                    existing.total_size_bytes += data["size"]
+                    existing.name = data["name"] or existing.name
+                    existing.domain = data["domain"] or existing.domain
+                    existing.message_count = data["count"]
+                    existing.unread_count = data["unread_count"]
+                    existing.total_size_bytes = data["size"]
                     if data["has_unsub"]:
                         existing.has_unsubscribe = True
                         existing.unsubscribe_url = data["unsub_url"] or existing.unsubscribe_url
                         existing.unsubscribe_mailto = data["unsub_mailto"] or existing.unsubscribe_mailto
                         existing.has_one_click = data["has_one_click"] or existing.has_one_click
+                    existing.categories = cats_str
+                    existing.sample_subject = data["sample_subject"] or existing.sample_subject
                     existing.updated_at = datetime.utcnow()
                 else:
                     new_sender = Sender(
@@ -214,18 +236,24 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                     )
                     session.add(new_sender)
 
-            # Insert messages (ignore duplicates)
+            # Insert or update messages (ignore duplicates)
             for m in message_records[:5000]:  # Cap stored individual messages to 5000
                 m_existing = await session.get(ScannedMessage, m.id)
                 if not m_existing:
                     session.add(m)
+                else:
+                    m_existing.subject = m.subject
+                    m_existing.snippet = m.snippet
+                    m_existing.date = m.date
+                    m_existing.size_estimate = m.size_estimate
+                    m_existing.label_ids = m.label_ids
 
             # Update UserSession scan stats
             sess_res = await session.execute(select(UserSession).where(UserSession.is_active == True))
             u_sess = sess_res.scalar_one_or_none()
             if u_sess:
                 u_sess.last_scan_at = datetime.utcnow()
-                u_sess.total_scanned_emails += total_found
+                u_sess.total_scanned_emails = total_found
 
             await session.commit()
 

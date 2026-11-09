@@ -14,9 +14,10 @@ export const ScanModal: React.FC<ScanModalProps> = ({
   onStartScan,
   onResetDatabase
 }) => {
-  const [scanDepth, setScanDepth] = useState<number>(1000);
+  const [scanDepth, setScanDepth] = useState<number>(1500);
   const [targetCategory, setTargetCategory] = useState<string>('');
   const [customQuery, setCustomQuery] = useState<string>('');
+  const [includeSent, setIncludeSent] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
@@ -24,6 +25,9 @@ export const ScanModal: React.FC<ScanModalProps> = ({
     let finalQuery = customQuery.trim();
     if (targetCategory && !finalQuery.includes(`category:${targetCategory}`)) {
       finalQuery = finalQuery ? `category:${targetCategory} ${finalQuery}` : `category:${targetCategory}`;
+    }
+    if (!includeSent && !finalQuery.includes('-in:sent')) {
+      finalQuery = finalQuery ? `${finalQuery} -in:sent -in:draft` : '-in:sent -in:draft';
     }
     onStartScan(finalQuery, scanDepth);
     onClose();
@@ -121,6 +125,23 @@ export const ScanModal: React.FC<ScanModalProps> = ({
             <option value="updates">Only Updates &amp; Newsletters</option>
             <option value="forums">Only Discussion Forums</option>
           </select>
+        </div>
+
+        {/* Incoming Only Toggle */}
+        <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+          <div className="text-left pr-4">
+            <div className="text-xs font-semibold text-slate-200">Incoming Mail Only (Recommended)</div>
+            <div className="text-[11px] text-slate-400">Excludes sent mail &amp; drafts so you don't clean your own emails</div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+            <input
+              type="checkbox"
+              checked={!includeSent}
+              onChange={(e) => setIncludeSent(!e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+          </label>
         </div>
 
         {/* Custom Gmail Search Query */}

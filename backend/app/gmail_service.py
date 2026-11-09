@@ -70,13 +70,14 @@ class GmailService:
         ]
         headers = self._get_headers()
         
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 resp = await client.get(url, headers=headers, params=params)
                 if resp.status_code == 200:
                     return resp.json()
-                elif resp.status_code == 429:
-                    await asyncio.sleep(1.5 ** attempt)
+                elif resp.status_code == 429 or (resp.status_code == 403 and "rateLimitExceeded" in resp.text):
+                    # Exponential backoff on Gmail quota throttling
+                    await asyncio.sleep(2 ** attempt + 0.5)
                     continue
                 else:
                     return None
