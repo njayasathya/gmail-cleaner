@@ -131,14 +131,17 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                 # High-speed batch fetch via Google Batch API (10x-20x faster)
                 results = await gmail.batch_fetch_messages_metadata(client, chunk)
 
-                # Fallback for any messages missing from batch
+                # If any messages were throttled, retry only missing ones in a single batch
                 if len(results) < len(chunk):
                     fetched_ids = {m.get("id") for m in results if m}
                     missing = [mid for mid in chunk if mid not in fetched_ids]
                     if missing:
-                        fallback_tasks = [gmail.fetch_message_metadata(client, mid) for mid in missing]
-                        fallback_res = await asyncio.gather(*fallback_tasks)
-                        results.extend([r for r in fallback_res if r])
+                        await asyncio.sleep(1.0)
+                        retry_res = await gmail.batch_fetch_messages_metadata(client, missing)
+                        results.extend(retry_res)
+
+                # Gentle 0.2s pacing between batches of 50 to avoid hitting Google's 250 units/sec quota spike
+                await asyncio.sleep(0.2)
 
                 for msg_data in results:
                     if not msg_data:
