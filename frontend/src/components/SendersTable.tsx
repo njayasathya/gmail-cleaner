@@ -88,8 +88,8 @@ export const SendersTable: React.FC<SendersTableProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Controls & Search Bar */}
-      <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+      {/* Sticky Command Bar (Search, Category Filters & Sort) */}
+      <div className="sticky top-16 z-20 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-slate-900/95 backdrop-blur-md p-3 rounded-xl border border-slate-800 shadow-xl shadow-black/50">
         {/* Search */}
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -98,7 +98,7 @@ export const SendersTable: React.FC<SendersTableProps> = ({
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search sender name, email, domain, or subject..."
-            className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
           />
         </div>
 
@@ -110,8 +110,8 @@ export const SendersTable: React.FC<SendersTableProps> = ({
               onClick={() => onCategoryChange(c.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                 selectedCategory === c.id
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40'
+                  : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800 hover:border-slate-700'
               }`}
             >
               {c.label}
@@ -144,7 +144,7 @@ export const SendersTable: React.FC<SendersTableProps> = ({
 
       {/* Floating Sticky Bulk Actions Bar */}
       {selectedEmails.length > 0 && (
-        <div className="sticky top-20 z-20 flex flex-wrap items-center justify-between gap-3 p-3 bg-indigo-950/90 border border-indigo-700/50 rounded-xl shadow-xl backdrop-blur animate-in fade-in slide-in-from-top-2">
+        <div className="sticky top-[138px] z-20 flex flex-wrap items-center justify-between gap-3 p-3 bg-indigo-950/95 border border-indigo-700/60 rounded-xl shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center gap-2">
             <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
               {selectedEmails.length}
