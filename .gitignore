@@ -22,6 +22,7 @@ yarn-error.log*
 data/cleaner.db*
 data/token.json
 data/credentials.json
+data/oauth_state.json
 .env
 
 # OS / Editor
