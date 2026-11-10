@@ -19,10 +19,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Application storage & credentials
-data/cleaner.db*
-data/token.json
-data/credentials.json
-data/oauth_state.json
+data/
 .env
 
 # OS / Editor
