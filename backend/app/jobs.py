@@ -1,16 +1,20 @@
 import asyncio
 import uuid
-from datetime import datetime
-from typing import Dict, Any, Optional, List, Callable, Set
-from sqlalchemy import select, update, delete
+from typing import Dict, Optional, List, Set
+from sqlalchemy import select
 from .database import AsyncSessionLocal
-from .models import JobRecord, Sender, ScannedMessage
-from .gmail_service import GmailService
+from .models import JobRecord
 from .schemas import JobResponse
+from .utils import utc_now
 
 # Active running jobs in memory for real-time streaming
 active_subscribers: Dict[str, Set[asyncio.Queue]] = {}
 cancelled_jobs: Set[str] = set()
+
+
+def _calc_percentage(processed: int, total: int) -> float:
+    return round((processed / max(total, 1)) * 100, 1) if total > 0 else 0.0
+
 
 class JobManager:
     @staticmethod
@@ -20,6 +24,7 @@ class JobManager:
     @staticmethod
     async def create_job(action: str, total_items: int = 0, message: str = "") -> JobRecord:
         job_id = JobManager.create_job_id()
+        now = utc_now()
         async with AsyncSessionLocal() as session:
             job = JobRecord(
                 id=job_id,
@@ -31,8 +36,8 @@ class JobManager:
                 error_count=0,
                 current_item="",
                 message=message,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=now,
+                updated_at=now
             )
             session.add(job)
             await session.commit()
@@ -70,13 +75,12 @@ class JobManager:
                 job.status = status
             if error_details:
                 job.error_details = (job.error_details or "") + "\n" + error_details
-            job.updated_at = datetime.utcnow()
+            job.updated_at = utc_now()
 
             await session.commit()
             await session.refresh(job)
 
-            # Broadcast to SSE queues
-            percentage = round((job.processed_items / max(job.total_items, 1)) * 100, 1) if job.total_items > 0 else 0
+            percentage = _calc_percentage(job.processed_items, job.total_items)
             payload = {
                 "id": job.id,
                 "action": job.action,
@@ -132,9 +136,8 @@ class JobManager:
             job = result.scalar_one_or_none()
             if not job:
                 return None
-            percentage = round((job.processed_items / max(job.total_items, 1)) * 100, 1) if job.total_items > 0 else 0
             res = JobResponse.model_validate(job)
-            res.percentage = percentage
+            res.percentage = _calc_percentage(job.processed_items, job.total_items)
             return res
 
     @staticmethod
@@ -146,8 +149,7 @@ class JobManager:
             jobs = result.scalars().all()
             output = []
             for j in jobs:
-                pct = round((j.processed_items / max(j.total_items, 1)) * 100, 1) if j.total_items > 0 else 0
                 item = JobResponse.model_validate(j)
-                item.percentage = pct
+                item.percentage = _calc_percentage(j.processed_items, j.total_items)
                 output.append(item)
             return output

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { StatsOverview } from './components/StatsOverview';
 import { SendersTable } from './components/SendersTable';
@@ -20,7 +21,7 @@ import {
 } from './services/api';
 
 import {
-  Sender, StatsResponse, AuthStatus, JobProgress, LabelInfo
+  Sender, StatsResponse, AuthStatus, JobProgress, LabelInfo, ToastNotice
 } from './types';
 
 export const App: React.FC = () => {
@@ -66,20 +67,32 @@ export const App: React.FC = () => {
   const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Active Running Background Job
+  // Active Running Background Job & Toast Notifications
   const [activeJob, setActiveJob] = useState<JobProgress | null>(null);
+  const [toasts, setToasts] = useState<ToastNotice[]>([]);
+
+  const notify = useCallback((type: ToastNotice['type'], message: string) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  }, []);
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   // Load initial data
   const loadAuthAndStats = useCallback(async () => {
     try {
-      const auth = await fetchAuthStatus();
+      const [auth, st] = await Promise.all([fetchAuthStatus(), fetchStats()]);
       setAuthStatus(auth);
-      const st = await fetchStats();
       setStats(st);
-    } catch (err) {
-      console.error('Failed to load initial stats:', err);
+    } catch (err: any) {
+      notify('error', err?.message || 'Failed to load account stats');
     }
-  }, []);
+  }, [notify]);
 
   const loadSenders = useCallback(async () => {
     try {
@@ -93,10 +106,10 @@ export const App: React.FC = () => {
       });
       setSenders(res.senders);
       setTotalSenders(res.total);
-    } catch (err) {
-      console.error('Failed to load senders:', err);
+    } catch (err: any) {
+      notify('error', err?.message || 'Failed to load senders list');
     }
-  }, [searchQuery, selectedCategory, sortBy, sortOrder, page, pageSize]);
+  }, [searchQuery, selectedCategory, sortBy, sortOrder, page, pageSize, notify]);
 
   const loadNewsletters = useCallback(async () => {
     try {
@@ -106,8 +119,8 @@ export const App: React.FC = () => {
         page_size: 200
       });
       setNewsletters(res.senders);
-    } catch (err) {
-      console.error('Failed to load newsletters:', err);
+    } catch {
+      // Senders loader already surfaces connection issues
     }
   }, []);
 
@@ -115,8 +128,8 @@ export const App: React.FC = () => {
     try {
       const lbls = await fetchLabels();
       setLabels(lbls);
-    } catch (err) {
-      console.error('Failed to load labels:', err);
+    } catch {
+      // Optional background label sync
     }
   }, []);
 
@@ -150,106 +163,67 @@ export const App: React.FC = () => {
         setActiveJob(job);
       },
       () => {
-        // Job complete - reload state
         loadAuthAndStats();
         loadSenders();
         loadNewsletters();
         setSelectedEmails([]);
       },
-      (err) => {
-        console.error('Stream error:', err);
+      () => {
+        notify('error', 'Lost live progress stream connection');
       }
     );
   };
 
-  // Actions
-  const handleScan = async (query: string = '', maxEmails: number = 1000) => {
+  // Shared helper for bulk actions starting a tracked job
+  const runJobAction = async (fn: () => Promise<{ job_id: string }>, errorLabel: string) => {
     try {
-      const res = await triggerScan(query, maxEmails);
+      const res = await fn();
       trackJob(res.job_id);
     } catch (err: any) {
-      alert(err.message || 'Could not start scan');
+      notify('error', err?.message || errorLabel);
     }
   };
 
-  const handleBulkTrash = async (emails: string[]) => {
-    try {
-      const res = await bulkTrash(emails);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Bulk trash failed');
-    }
-  };
+  const handleScan = (query: string = '', maxEmails: number = 1000) =>
+    runJobAction(() => triggerScan(query, maxEmails), 'Could not start scan');
 
-  const handleBulkPermanentDelete = async (emails: string[]) => {
-    try {
-      const res = await bulkPermanentDelete(emails);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Permanent delete failed');
-    }
-  };
+  const handleBulkTrash = (emails: string[]) =>
+    runJobAction(() => bulkTrash(emails), 'Bulk trash failed');
 
-  const handleBulkArchive = async (emails: string[]) => {
-    try {
-      const res = await bulkArchive(emails);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Bulk archive failed');
-    }
-  };
+  const handleBulkPermanentDelete = (emails: string[]) =>
+    runJobAction(() => bulkPermanentDelete(emails), 'Permanent delete failed');
 
-  const handleBulkMarkRead = async (emails: string[], read: boolean) => {
-    try {
-      const res = await bulkMarkRead(emails, read);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Bulk mark read failed');
-    }
-  };
+  const handleBulkArchive = (emails: string[]) =>
+    runJobAction(() => bulkArchive(emails), 'Bulk archive failed');
 
-  const handleBulkMarkImportant = async (emails: string[], important: boolean) => {
-    try {
-      const res = await bulkMarkImportant(emails, important);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Bulk mark important failed');
-    }
-  };
+  const handleBulkMarkRead = (emails: string[], read: boolean) =>
+    runJobAction(() => bulkMarkRead(emails, read), 'Bulk mark read failed');
 
-  const handleBulkLabel = async (emails: string[], labelId: string, action: 'apply' | 'remove') => {
-    try {
-      const res = await bulkApplyLabel(emails, labelId, action);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Bulk label failed');
-    }
-  };
+  const handleBulkMarkImportant = (emails: string[], important: boolean) =>
+    runJobAction(() => bulkMarkImportant(emails, important), 'Bulk mark important failed');
+
+  const handleBulkLabel = (emails: string[], labelId: string, action: 'apply' | 'remove') =>
+    runJobAction(() => bulkApplyLabel(emails, labelId, action), 'Bulk label failed');
+
+  const handleUnsubscribeBulk = (emails: string[], trashExisting: boolean = false) =>
+    runJobAction(() => unsubscribeBulk(emails, trashExisting), 'Bulk unsubscribe failed');
 
   const handleUnsubscribeSingle = async (email: string, trashExisting: boolean = false) => {
     try {
       const res = await unsubscribeSingle(email, trashExisting);
       if (res.status === 'success') {
-        alert(res.message);
+        notify('success', res.message);
         loadSenders();
         loadNewsletters();
         loadAuthAndStats();
       } else if (res.manual_url) {
+        notify('info', 'Opening sender unsubscribe link in a new tab.');
         window.open(res.manual_url, '_blank');
       } else {
-        alert(res.message);
+        notify('info', res.message);
       }
     } catch (err: any) {
-      alert(err.message || 'Unsubscribe request failed');
-    }
-  };
-
-  const handleUnsubscribeBulk = async (emails: string[], trashExisting: boolean = false) => {
-    try {
-      const res = await unsubscribeBulk(emails, trashExisting);
-      trackJob(res.job_id);
-    } catch (err: any) {
-      alert(err.message || 'Bulk unsubscribe failed');
+      notify('error', err?.message || 'Unsubscribe request failed');
     }
   };
 
@@ -258,7 +232,7 @@ export const App: React.FC = () => {
       const url = await fetchLoginUrl();
       window.location.href = url;
     } catch (err: any) {
-      alert(err.message || 'Could not start OAuth login. Please configure Client ID and Secret in Settings.');
+      notify('error', err?.message || 'Could not start OAuth login. Configure OAuth in Settings.');
       setIsSettingsOpen(true);
     }
   };
@@ -266,6 +240,7 @@ export const App: React.FC = () => {
   const handleLogout = async () => {
     await logout();
     await loadAuthAndStats();
+    notify('info', 'Disconnected Gmail account.');
   };
 
   const handleSaveCredentials = async (cid: string, secret: string) => {
@@ -275,24 +250,38 @@ export const App: React.FC = () => {
 
   const handleSeedDemoData = async () => {
     await seedDemoData();
-    await loadAuthAndStats();
-    await loadSenders();
-    await loadNewsletters();
+    await Promise.all([loadAuthAndStats(), loadSenders(), loadNewsletters()]);
+    notify('success', 'Sample demo inbox data populated.');
   };
 
   const handleResetDatabase = async () => {
     try {
       await resetScanDatabase();
-      await loadAuthAndStats();
-      await loadSenders();
-      await loadNewsletters();
+      await Promise.all([loadAuthAndStats(), loadSenders(), loadNewsletters()]);
       setSelectedEmails([]);
+      notify('success', 'Cached scan database cleared.');
     } catch (err: any) {
-      alert(err.message || 'Failed to reset database');
+      notify('error', err?.message || 'Failed to reset database');
     }
   };
 
-  // Selection handlers
+  // Filter / Selection handlers
+  const handleSearchChange = (q: string) => {
+    setSearchQuery(q);
+    setPage(1);
+  };
+
+  const handleCategoryChange = (cat: string) => {
+    setSelectedCategory(cat);
+    setPage(1);
+  };
+
+  const handleSortChange = (sb: string, so: string) => {
+    setSortBy(sb);
+    setSortOrder(so);
+    setPage(1);
+  };
+
   const handleToggleSelect = (email: string) => {
     setSelectedEmails((prev) =>
       prev.includes(email) ? prev.filter((e) => e !== email) : [...prev, email]
@@ -309,6 +298,37 @@ export const App: React.FC = () => {
     }
   };
 
+  const sendersTableNode = (
+    <SendersTable
+      senders={senders}
+      totalSenders={totalSenders}
+      page={page}
+      pageSize={pageSize}
+      onPageChange={setPage}
+      searchQuery={searchQuery}
+      onSearchChange={handleSearchChange}
+      selectedCategory={selectedCategory}
+      onCategoryChange={handleCategoryChange}
+      sortBy={sortBy}
+      sortOrder={sortOrder}
+      onSortChange={handleSortChange}
+      selectedEmails={selectedEmails}
+      onToggleSelect={handleToggleSelect}
+      onSelectAllPage={handleSelectAllPage}
+      onClearSelection={() => setSelectedEmails([])}
+      onBulkTrash={handleBulkTrash}
+      onBulkPermanentDelete={handleBulkPermanentDelete}
+      onBulkArchive={handleBulkArchive}
+      onBulkMarkRead={handleBulkMarkRead}
+      onBulkMarkImportant={handleBulkMarkImportant}
+      onBulkLabel={handleBulkLabel}
+      onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
+      onInspectSender={setInspectingSender}
+      onOpenLabelManager={() => setIsLabelModalOpen(true)}
+      availableLabels={labels}
+    />
+  );
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
       {/* Top Navigation */}
@@ -317,13 +337,14 @@ export const App: React.FC = () => {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenLabels={() => setIsLabelModalOpen(true)}
         onOpenScan={() => setIsScanModalOpen(true)}
         onLogout={handleLogout}
         onLogin={handleLogin}
       />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      {/* Wide Main Container */}
+      <main className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-10 xl:px-12 py-7 space-y-7">
         {/* Metric Stats Cards */}
         <StatsOverview
           stats={stats}
@@ -331,45 +352,7 @@ export const App: React.FC = () => {
         />
 
         {/* Tab 1: Senders Table */}
-        {activeTab === 'senders' && (
-          <SendersTable
-            senders={senders}
-            totalSenders={totalSenders}
-            page={page}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            searchQuery={searchQuery}
-            onSearchChange={(q) => {
-              setSearchQuery(q);
-              setPage(1);
-            }}
-            selectedCategory={selectedCategory}
-            onCategoryChange={(cat) => {
-              setSelectedCategory(cat);
-              setPage(1);
-            }}
-            sortBy={sortBy}
-            sortOrder={sortOrder}
-            onSortChange={(sb, so) => {
-              setSortBy(sb);
-              setSortOrder(so);
-              setPage(1);
-            }}
-            selectedEmails={selectedEmails}
-            onToggleSelect={handleToggleSelect}
-            onSelectAllPage={handleSelectAllPage}
-            onClearSelection={() => setSelectedEmails([])}
-            onBulkTrash={handleBulkTrash}
-            onBulkPermanentDelete={handleBulkPermanentDelete}
-            onBulkArchive={handleBulkArchive}
-            onBulkMarkRead={handleBulkMarkRead}
-            onBulkMarkImportant={handleBulkMarkImportant}
-            onBulkLabel={handleBulkLabel}
-            onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
-            onInspectSender={setInspectingSender}
-            availableLabels={labels}
-          />
-        )}
+        {activeTab === 'senders' && sendersTableNode}
 
         {/* Tab 2: 1-Click Unsubscribe Center */}
         {activeTab === 'unsubscribe' && (
@@ -386,50 +369,20 @@ export const App: React.FC = () => {
 
         {/* Tab 3: Smart Clean & Recipes */}
         {activeTab === 'smart' && (
-          <div className="space-y-4">
-            <div className="p-8 rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 border border-indigo-800/40 text-center space-y-3">
-              <h2 className="text-xl font-bold text-white">Smart Clean Presets &amp; Deep Filters</h2>
-              <p className="text-xs text-slate-400 max-w-md mx-auto">
-                Clean your inbox by targeted categories, file sizes, and inactive date windows.
+          <div className="space-y-6">
+            <div className="p-8 rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 border border-indigo-800/40 text-center space-y-3.5 shadow-xl">
+              <h2 className="text-2xl font-bold text-white">Smart Clean Presets &amp; Deep Filters</h2>
+              <p className="text-sm text-slate-300 max-w-xl mx-auto leading-relaxed">
+                Clean your inbox by targeted Gmail categories, large attachment sizes, and inactive date windows.
               </p>
               <button
                 onClick={() => setIsSmartFilterOpen(true)}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition"
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-600/30 transition"
               >
                 Launch Filter Builder
               </button>
             </div>
-            {/* Also render senders table below */}
-            <SendersTable
-              senders={senders}
-              totalSenders={totalSenders}
-              page={page}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
-              selectedCategory={selectedCategory}
-              onCategoryChange={setSelectedCategory}
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSortChange={(sb, so) => {
-                setSortBy(sb);
-                setSortOrder(so);
-              }}
-              selectedEmails={selectedEmails}
-              onToggleSelect={handleToggleSelect}
-              onSelectAllPage={handleSelectAllPage}
-              onClearSelection={() => setSelectedEmails([])}
-              onBulkTrash={handleBulkTrash}
-              onBulkPermanentDelete={handleBulkPermanentDelete}
-              onBulkArchive={handleBulkArchive}
-              onBulkMarkRead={handleBulkMarkRead}
-              onBulkMarkImportant={handleBulkMarkImportant}
-              onBulkLabel={handleBulkLabel}
-              onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
-              onInspectSender={setInspectingSender}
-              availableLabels={labels}
-            />
+            {sendersTableNode}
           </div>
         )}
       </main>
@@ -455,10 +408,18 @@ export const App: React.FC = () => {
         onCreateLabel={async (name) => {
           await createLabel(name);
           loadLabels();
+          notify('success', `Label "${name}" created.`);
         }}
         onDeleteLabel={async (id) => {
           await deleteLabel(id);
           loadLabels();
+          notify('info', 'Label deleted.');
+        }}
+        onApplyLabelToSelected={(labelId) => {
+          if (selectedEmails.length > 0) {
+            setIsLabelModalOpen(false);
+            handleBulkLabel(selectedEmails, labelId, 'apply');
+          }
         }}
         selectedEmailsCount={selectedEmails.length}
       />
@@ -486,7 +447,37 @@ export const App: React.FC = () => {
           loadAuthAndStats();
           loadSenders();
         }}
+        onNotify={notify}
       />
+
+      {/* Non-blocking Toast Notifications */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-5 right-5 z-[60] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-4 sm:px-0">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-2xl backdrop-blur-md text-sm ${
+                toast.type === 'success'
+                  ? 'bg-emerald-950/95 border-emerald-700/70 text-emerald-100'
+                  : toast.type === 'error'
+                  ? 'bg-rose-950/95 border-rose-700/70 text-rose-100'
+                  : 'bg-slate-900/95 border-slate-700 text-slate-100'
+              }`}
+            >
+              {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />}
+              {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />}
+              {toast.type === 'info' && <Info className="w-5 h-5 text-indigo-400 flex-shrink-0 mt-0.5" />}
+              <span className="flex-1 leading-snug">{toast.message}</span>
+              <button
+                onClick={() => dismissToast(toast.id)}
+                className="text-slate-400 hover:text-white transition flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class SenderResponse(BaseModel):
     email: str
@@ -19,8 +19,7 @@ class SenderResponse(BaseModel):
     sample_subject: Optional[str] = None
     last_received_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SenderListResponse(BaseModel):
     total: int
@@ -42,8 +41,7 @@ class EmailMessageItem(BaseModel):
     has_unsubscribe: bool = False
     gmail_url: str = ""
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SenderMessagesResponse(BaseModel):
     sender_email: str
@@ -112,8 +110,7 @@ class JobResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SmartFilterPreset(BaseModel):
     id: str

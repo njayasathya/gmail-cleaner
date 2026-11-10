@@ -1,7 +1,7 @@
 export interface Sender {
-  email: str;
-  name: str;
-  domain: str;
+  email: string;
+  name: string;
+  domain: string;
   message_count: number;
   unread_count: number;
   total_size_bytes: number;
@@ -15,8 +15,6 @@ export interface Sender {
   sample_subject?: string | null;
   last_received_at?: string | null;
 }
-
-export type str = string;
 
 export interface SenderListResponse {
   total: number;
@@ -73,15 +71,6 @@ export interface LabelInfo {
   messages_unread?: number;
 }
 
-export interface SmartFilter {
-  id: string;
-  name: string;
-  description: string;
-  query: string;
-  category: string;
-  recommended_action: string;
-}
-
 export interface EmailMessageItem {
   id: string;
   thread_id: string;
@@ -110,4 +99,10 @@ export interface UnsubscribeResult {
   method: string;
   message: string;
   manual_url?: string;
+}
+
+export interface ToastNotice {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  message: string;
 }

@@ -75,16 +75,55 @@ def test_safe_parse_internal_date_edge_cases():
 
 @pytest.mark.asyncio
 async def test_bulk_action_worker_no_database_lock():
+    from unittest.mock import patch
     from app.routes.action_routes import execute_bulk_action_worker
     from app.jobs import JobManager
 
-    job = await JobManager.create_job("trash", total_items=3, message="Test action")
-    # Run with multiple senders in demo mode to ensure concurrent sessions don't lock SQLite
-    await execute_bulk_action_worker(
-        job_id=job.id,
-        action_type="trash",
-        senders=["test1@example.com", "test2@example.com", "test3@example.com"]
-    )
-    status = await JobManager.get_job(job.id)
-    assert status.status == "completed"
-    assert status.processed_items == 3
+    with patch("app.routes.action_routes.is_authenticated", return_value=False):
+        job = await JobManager.create_job("trash", total_items=3, message="Test action")
+        await execute_bulk_action_worker(
+            job_id=job.id,
+            action_type="trash",
+            senders=["__test1@example.com", "__test2@example.com", "__test3@example.com"]
+        )
+        status = await JobManager.get_job(job.id)
+        assert status.status == "completed"
+        assert status.processed_items == 3
+
+
+def test_parse_label_ids_and_gmail_message():
+    from app.utils import parse_label_ids
+    from app.gmail_service import GmailService
+    from app.routes.scan_routes import _parse_gmail_message
+
+    assert parse_label_ids('["INBOX", "UNREAD"]') == ["INBOX", "UNREAD"]
+    assert parse_label_ids("['INBOX', 'CATEGORY_UPDATES']") == ["INBOX", "CATEGORY_UPDATES"]
+    assert parse_label_ids("invalid") == []
+    assert parse_label_ids(None) == []
+
+    gmail = GmailService()
+    msg_data = {
+        "id": "msg_test_1",
+        "threadId": "thr_1",
+        "sizeEstimate": 4096,
+        "labelIds": ["INBOX", "UNREAD", "CATEGORY_PROMOTIONS"],
+        "internalDate": "1794186932000",
+        "snippet": "Save 20% today",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": "Deals <deals@shop.example.com>"},
+                {"name": "Subject", "value": "Flash Sale"},
+                {"name": "List-Unsubscribe", "value": "<https://shop.example.com/unsub>"},
+                {"name": "List-Unsubscribe-Post", "value": "List-Unsubscribe=One-Click"},
+            ]
+        },
+    }
+    parsed = _parse_gmail_message(msg_data, gmail)
+    assert parsed is not None
+    meta, record = parsed
+    assert meta["email_addr"] == "deals@shop.example.com"
+    assert meta["is_unread"] is True
+    assert meta["has_one_click"] is True
+    assert record.id == "msg_test_1"
+    assert record.subject == "Flash Sale"
+

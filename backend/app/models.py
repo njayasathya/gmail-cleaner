@@ -3,6 +3,7 @@ from typing import Optional
 from sqlalchemy import String, Integer, BigInteger, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
+from .utils import utc_now
 
 class Sender(Base):
     __tablename__ = "senders"
@@ -26,7 +27,7 @@ class Sender(Base):
     categories: Mapped[str] = mapped_column(String(255), default="")  # e.g. "promotions,updates"
     sample_subject: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_received_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class ScannedMessage(Base):
     __tablename__ = "scanned_messages"
@@ -60,8 +61,8 @@ class JobRecord(Base):
     current_item: Mapped[str] = mapped_column(String(255), default="")
     message: Mapped[str] = mapped_column(Text, default="")
     error_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class UserSession(Base):
     __tablename__ = "user_sessions"

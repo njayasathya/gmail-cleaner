@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -7,14 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..database import get_db
 from ..models import UserSession, Sender
-from ..schemas import StatsResponse, GoogleCredentialsConfig
+from ..schemas import GoogleCredentialsConfig
 from ..auth import (
     is_authenticated, is_configured, get_credentials, create_oauth_flow,
-    save_token, logout as auth_logout, fetch_user_info, save_credentials_file,
+    save_token, logout as auth_logout, fetch_user_info,
     save_code_verifier, get_and_clear_code_verifier
 )
 from ..config import settings
+from ..utils import get_logger, utc_now
 
+logger = get_logger("auth_routes")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/status")
@@ -117,8 +118,7 @@ async def oauth_callback(
         # Redirect to frontend root
         return RedirectResponse(url="/")
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("OAuth callback failed")
         raise HTTPException(status_code=400, detail=f"Authentication error: {str(e)}")
 
 @router.post("/logout")
@@ -154,6 +154,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
     """
     Populates sample real-world senders and newsletters for demonstration purposes.
     """
+    now = utc_now()
     samples = [
         Sender(
             email="promotions@marketing.uber.com",
@@ -167,7 +168,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=True,
             categories="promotions",
             sample_subject="40% off your next 3 orders this weekend!",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="updates@linkedin.com",
@@ -181,7 +182,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=True,
             categories="social",
             sample_subject="You appeared in 14 searches this week",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="news@morningbrew.com",
@@ -196,7 +197,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=True,
             categories="updates",
             sample_subject="Why tech is doubling down on chips",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="deals@amazon.com",
@@ -209,7 +210,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             unsubscribe_url="https://www.amazon.com/gp/gss/o/demo",
             categories="promotions",
             sample_subject="Lightning Deals hand-picked for you",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="newsletter@tldr.tech",
@@ -223,7 +224,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=True,
             categories="updates",
             sample_subject="OpenAI releases new models & AI breakthroughs",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="notifications@github.com",
@@ -237,7 +238,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=False,
             categories="updates,forums",
             sample_subject="[Docker/compose] Pull request #1042 merged",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="info@twitter.com",
@@ -251,7 +252,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=True,
             categories="social",
             sample_subject="Trending in your area today",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         ),
         Sender(
             email="noreply@medium.com",
@@ -265,7 +266,7 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             has_one_click=True,
             categories="updates",
             sample_subject="Top stories in Software Engineering for you",
-            last_received_at=datetime.utcnow()
+            last_received_at=now
         )
     ]
 

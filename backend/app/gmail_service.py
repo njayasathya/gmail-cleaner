@@ -3,15 +3,16 @@ import base64
 import email
 import email.utils
 from email.message import EmailMessage
-from datetime import datetime
 import json
 import random
 import re
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Callable, List, Dict, Any, Optional, Tuple
 import httpx
 from .auth import get_credentials
+from .utils import get_logger
 
+logger = get_logger("gmail_service")
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 class GmailService:
@@ -168,32 +169,35 @@ class GmailService:
                                     succeeded_ids.add(mid)
 
                     pending_ids = [mid for mid in pending_ids if mid not in succeeded_ids]
-
                     if pending_ids:
-                        jitter = random.uniform(0.1, 0.4)
-                        if on_rate_limit:
-                            try:
-                                await on_rate_limit(len(pending_ids), backoff_delay)
-                            except Exception:
-                                pass
-                        await asyncio.sleep(backoff_delay + jitter)
-                        backoff_delay = min(backoff_delay * 2, 25.0)
+                        backoff_delay = await self._wait_rate_limit(backoff_delay, len(pending_ids), on_rate_limit)
                 elif resp.status_code in (429, 403):
-                    jitter = random.uniform(0.1, 0.4)
-                    if on_rate_limit:
-                        try:
-                            await on_rate_limit(len(pending_ids), backoff_delay)
-                        except Exception:
-                            pass
-                    await asyncio.sleep(backoff_delay + jitter)
-                    backoff_delay = min(backoff_delay * 2, 25.0)
+                    backoff_delay = await self._wait_rate_limit(backoff_delay, len(pending_ids), on_rate_limit)
                 else:
+                    logger.warning("Batch fetch returned unexpected HTTP %s", resp.status_code)
                     break
-            except Exception:
+            except Exception as err:
+                logger.warning("Batch fetch attempt %s failed: %s", attempt, err)
                 await asyncio.sleep(backoff_delay)
                 backoff_delay = min(backoff_delay * 2, 25.0)
 
         return all_results
+
+    async def _wait_rate_limit(
+        self,
+        backoff_delay: float,
+        pending_count: int,
+        on_rate_limit: Optional[Any]
+    ) -> float:
+        """Notifies listeners, sleeps with jitter, and returns the next capped backoff interval."""
+        jitter = random.uniform(0.1, 0.4)
+        if on_rate_limit:
+            try:
+                await on_rate_limit(pending_count, backoff_delay)
+            except Exception:
+                pass
+        await asyncio.sleep(backoff_delay + jitter)
+        return min(backoff_delay * 2, 25.0)
 
     def parse_sender_info(self, from_header: str) -> Tuple[str, str, str]:
         """
@@ -233,55 +237,59 @@ class GmailService:
         has_one_click = bool(unsub_post_header and "List-Unsubscribe=One-Click" in unsub_post_header)
         return http_url, mailto_uri, has_one_click
 
-    async def batch_modify(self, message_ids: List[str], add_labels: List[str] = None, remove_labels: List[str] = None) -> int:
-        """
-        Modifies labels on up to 1000 messages per request using Gmail batchModify
-        """
+    async def _post_batch_chunks(
+        self,
+        endpoint: str,
+        message_ids: List[str],
+        build_payload: Callable[[List[str]], Dict[str, Any]]
+    ) -> int:
+        """Dispatches chunked POST requests (up to 1000 IDs/request) to Gmail batch endpoints."""
         if not message_ids:
             return 0
 
         headers = self._get_headers()
         chunk_size = 1000
-        modified_count = 0
+        affected_count = 0
 
         async with httpx.AsyncClient(timeout=45.0) as client:
             for i in range(0, len(message_ids), chunk_size):
                 chunk = message_ids[i:i + chunk_size]
-                body = {
-                    "ids": chunk,
-                    "addLabelIds": add_labels or [],
-                    "removeLabelIds": remove_labels or []
-                }
-                resp = await client.post(f"{GMAIL_API_BASE}/messages/batchModify", headers=headers, json=body)
-                if resp.status_code in [200, 204]:
-                    modified_count += len(chunk)
+                resp = await client.post(
+                    f"{GMAIL_API_BASE}/messages/{endpoint}",
+                    headers=headers,
+                    json=build_payload(chunk)
+                )
+                if resp.status_code in (200, 204):
+                    affected_count += len(chunk)
                 else:
-                    print(f"batchModify failed with {resp.status_code}: {resp.text}")
+                    logger.error("%s failed with HTTP %s: %s", endpoint, resp.status_code, resp.text)
 
-        return modified_count
+        return affected_count
+
+    async def batch_modify(
+        self,
+        message_ids: List[str],
+        add_labels: Optional[List[str]] = None,
+        remove_labels: Optional[List[str]] = None
+    ) -> int:
+        """Modifies labels on up to 1000 messages per request using Gmail batchModify."""
+        return await self._post_batch_chunks(
+            "batchModify",
+            message_ids,
+            lambda chunk: {
+                "ids": chunk,
+                "addLabelIds": add_labels or [],
+                "removeLabelIds": remove_labels or []
+            }
+        )
 
     async def batch_delete(self, message_ids: List[str]) -> int:
-        """
-        Permanently deletes messages using Gmail batchDelete
-        """
-        if not message_ids:
-            return 0
-
-        headers = self._get_headers()
-        chunk_size = 1000
-        deleted_count = 0
-
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            for i in range(0, len(message_ids), chunk_size):
-                chunk = message_ids[i:i + chunk_size]
-                body = {"ids": chunk}
-                resp = await client.post(f"{GMAIL_API_BASE}/messages/batchDelete", headers=headers, json=body)
-                if resp.status_code in [200, 204]:
-                    deleted_count += len(chunk)
-                else:
-                    print(f"batchDelete failed with {resp.status_code}: {resp.text}")
-
-        return deleted_count
+        """Permanently deletes messages using Gmail batchDelete."""
+        return await self._post_batch_chunks(
+            "batchDelete",
+            message_ids,
+            lambda chunk: {"ids": chunk}
+        )
 
     async def list_labels(self) -> List[Dict[str, Any]]:
         headers = self._get_headers()

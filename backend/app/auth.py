@@ -1,6 +1,5 @@
 import json
 import os
-from pathlib import Path
 
 # Allow oauthlib to accept additional scopes returned by Google (e.g. openid) without throwing ScopeChangeError
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
@@ -12,6 +11,9 @@ from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 import httpx
 from .config import settings
+from .utils import get_logger
+
+logger = get_logger("auth")
 
 def get_client_config() -> Optional[Dict[str, Any]]:
     # 1. Check if credentials.json exists
@@ -63,7 +65,7 @@ def get_credentials() -> Optional[Credentials]:
                 token.write(creds.to_json())
         return creds if creds.valid else None
     except Exception as e:
-        print(f"Error loading credentials: {e}")
+        logger.error("Error loading credentials: %s", e)
         return None
 
 def is_authenticated() -> bool:
@@ -83,7 +85,7 @@ def save_code_verifier(state: str, code_verifier: Optional[str]):
         with open(STATE_FILE, "w") as f:
             json.dump(data, f)
     except Exception as e:
-        print(f"Error saving code verifier: {e}")
+        logger.warning("Error saving code verifier: %s", e)
 
 def get_and_clear_code_verifier(state: Optional[str]) -> Optional[str]:
     try:
@@ -102,7 +104,7 @@ def get_and_clear_code_verifier(state: Optional[str]) -> Optional[str]:
             json.dump(data, f)
         return verifier
     except Exception as e:
-        print(f"Error reading code verifier: {e}")
+        logger.warning("Error reading code verifier: %s", e)
         return None
 
 def create_oauth_flow(state: Optional[str] = None, redirect_uri: Optional[str] = None) -> Optional[Flow]:

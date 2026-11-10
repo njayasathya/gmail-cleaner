@@ -11,14 +11,16 @@ from fastapi.responses import FileResponse
 
 from .config import settings
 from .database import init_db
+from .utils import configure_logging
 from .routes import (
     auth_routes, scan_routes, action_routes,
     unsubscribe_routes, label_routes, export_routes, job_routes
 )
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize SQLite database and tables
+    configure_logging()
     await init_db()
     yield
 

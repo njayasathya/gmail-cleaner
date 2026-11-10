@@ -264,8 +264,8 @@ export function streamJob(
         eventSource.close();
         if (onComplete) onComplete();
       }
-    } catch (err) {
-      console.error('Error parsing SSE event:', err);
+    } catch {
+      // Ignore malformed heartbeat or partial SSE frame
     }
   });
 

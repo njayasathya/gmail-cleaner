@@ -1,12 +1,12 @@
 import asyncio
 import json
-import ast
-from datetime import datetime, timedelta
-from typing import Optional, List, Any
-from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
+from typing import Optional, List, Dict, Any, Tuple, Set
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, asc, or_, case, delete
 import httpx
+
+from ..config import settings
 from ..database import get_db, AsyncSessionLocal
 from ..models import Sender, ScannedMessage, UserSession
 from ..schemas import (
@@ -16,67 +16,236 @@ from ..schemas import (
 from ..gmail_service import GmailService
 from ..jobs import JobManager
 from ..auth import is_authenticated
+from ..utils import get_logger, utc_now, safe_parse_internal_date, parse_label_ids
 
+logger = get_logger("scan_routes")
 router = APIRouter(prefix="", tags=["scan & senders"])
 
-def safe_parse_internal_date(internal_ms: Any) -> Optional[datetime]:
-    """
-    Safely converts Gmail internalDate (milliseconds since epoch) to a datetime object.
-    Uses UTC delta to avoid Windows C-runtime OSError([Errno 22] Invalid argument)
-    for negative, zero, or edge-case historical timestamps.
-    """
-    if not internal_ms:
+
+def _parse_gmail_message(
+    msg_data: Dict[str, Any],
+    gmail: GmailService,
+    forced_sender_email: Optional[str] = None,
+    fallback_sender_name: str = ""
+) -> Optional[Tuple[Dict[str, Any], ScannedMessage]]:
+    """Extracts normalized metadata and constructs a ScannedMessage ORM instance."""
+    mid = msg_data.get("id")
+    if not mid:
         return None
-    try:
-        ts = float(internal_ms) / 1000.0
-        if ts < -62135596800:
-            return datetime(1970, 1, 1)
-        if ts > 253402300799:
-            return datetime(2099, 12, 31)
-        return datetime(1970, 1, 1) + timedelta(seconds=ts)
-    except Exception:
-        return None
+
+    thread_id = msg_data.get("threadId", "") or mid
+    size_estimate = int(msg_data.get("sizeEstimate", 0))
+    label_ids = msg_data.get("labelIds", []) or []
+
+    headers = {
+        h["name"].lower(): h["value"]
+        for h in msg_data.get("payload", {}).get("headers", [])
+    }
+    from_header = headers.get("from", "")
+    subject = headers.get("subject", "(No Subject)")
+    unsub_header = headers.get("list-unsubscribe", "")
+    unsub_post_header = headers.get("list-unsubscribe-post", "")
+
+    name, parsed_email, domain = gmail.parse_sender_info(from_header)
+    email_addr = forced_sender_email or parsed_email
+    if not email_addr:
+        email_addr = "unknown@unknown.domain"
+        name = name or "Unknown Sender"
+        domain = "unknown.domain"
+    elif forced_sender_email and not domain and "@" in forced_sender_email:
+        domain = forced_sender_email.split("@")[-1]
+
+    resolved_name = name or fallback_sender_name
+    http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(
+        unsub_header, unsub_post_header
+    )
+    msg_date = safe_parse_internal_date(msg_data.get("internalDate"))
+
+    record = ScannedMessage(
+        id=mid,
+        thread_id=thread_id,
+        sender_email=email_addr,
+        sender_name=resolved_name,
+        subject=subject,
+        snippet=msg_data.get("snippet", ""),
+        date=msg_date,
+        size_estimate=size_estimate,
+        label_ids=json.dumps(label_ids),
+        has_unsubscribe=bool(http_url or mailto_uri),
+        unsubscribe_url=http_url,
+        unsubscribe_mailto=mailto_uri,
+        has_one_click=has_one_click
+    )
+    meta = {
+        "email_addr": email_addr,
+        "name": resolved_name,
+        "domain": domain,
+        "subject": subject,
+        "size_estimate": size_estimate,
+        "label_ids": label_ids,
+        "is_unread": "UNREAD" in label_ids,
+        "has_unsub": bool(http_url or mailto_uri),
+        "unsub_url": http_url,
+        "unsub_mailto": mailto_uri,
+        "has_one_click": has_one_click,
+    }
+    return meta, record
+
+
+async def _upsert_scanned_messages(session: AsyncSession, messages: List[ScannedMessage]) -> None:
+    """Inserts new ScannedMessage records or refreshes mutable metadata on existing ones."""
+    for m in messages:
+        existing = await session.get(ScannedMessage, m.id)
+        if not existing:
+            session.add(m)
+        else:
+            existing.subject = m.subject
+            existing.snippet = m.snippet
+            existing.date = m.date
+            existing.size_estimate = m.size_estimate
+            existing.label_ids = m.label_ids
+
+
+async def _sync_sender_stats_from_messages(
+    session: AsyncSession,
+    target_emails: Optional[Set[str]] = None
+) -> None:
+    """Recomputes Sender counts and sizes from ScannedMessage as the single source of truth."""
+    cnt_query = select(
+        ScannedMessage.sender_email,
+        func.count(ScannedMessage.id),
+        func.sum(case((ScannedMessage.label_ids.like('%"UNREAD"%'), 1), else_=0)),
+        func.sum(ScannedMessage.size_estimate)
+    ).group_by(ScannedMessage.sender_email)
+
+    if target_emails:
+        cnt_query = cnt_query.where(ScannedMessage.sender_email.in_(target_emails))
+
+    cnt_res = await session.execute(cnt_query)
+    stats_map = {
+        s_email: (m_cnt, u_cnt or 0, s_bytes or 0)
+        for s_email, m_cnt, u_cnt, s_bytes in cnt_res.all()
+    }
+
+    emails_to_update = target_emails if target_emails else set(stats_map.keys())
+    for s_email in emails_to_update:
+        s_obj = await session.get(Sender, s_email)
+        if s_obj:
+            m_cnt, u_cnt, s_bytes = stats_map.get(s_email, (0, 0, 0))
+            s_obj.message_count = m_cnt
+            s_obj.unread_count = u_cnt
+            s_obj.total_size_bytes = s_bytes
+
+
+async def _commit_senders_and_sync(
+    sender_aggr: Dict[str, Dict[str, Any]],
+    batch_messages: List[ScannedMessage],
+    fallback_count: int
+) -> int:
+    """Flushes pending messages, upserts discovered senders, and syncs totals cleanly."""
+    now = utc_now()
+    async with AsyncSessionLocal() as session:
+        if batch_messages:
+            await _upsert_scanned_messages(session, batch_messages)
+            batch_messages.clear()
+
+        for email_addr, data in sender_aggr.items():
+            existing = await session.get(Sender, email_addr)
+            cats_str = ",".join(sorted(list(data["categories"])))
+            if existing:
+                existing.name = data["name"] or existing.name
+                existing.domain = data["domain"] or existing.domain
+                existing.message_count = data["count"]
+                existing.unread_count = data["unread_count"]
+                existing.total_size_bytes = data["size"]
+                if data["has_unsub"]:
+                    existing.has_unsubscribe = True
+                    existing.unsubscribe_url = data["unsub_url"] or existing.unsubscribe_url
+                    existing.unsubscribe_mailto = data["unsub_mailto"] or existing.unsubscribe_mailto
+                    existing.has_one_click = data["has_one_click"] or existing.has_one_click
+                existing.categories = cats_str
+                existing.sample_subject = data["sample_subject"] or existing.sample_subject
+                existing.updated_at = now
+            else:
+                session.add(
+                    Sender(
+                        email=email_addr,
+                        name=data["name"],
+                        domain=data["domain"],
+                        message_count=data["count"],
+                        unread_count=data["unread_count"],
+                        total_size_bytes=data["size"],
+                        has_unsubscribe=data["has_unsub"],
+                        unsubscribe_url=data["unsub_url"],
+                        unsubscribe_mailto=data["unsub_mailto"],
+                        has_one_click=data["has_one_click"],
+                        categories=cats_str,
+                        sample_subject=data["sample_subject"],
+                        last_received_at=now,
+                        updated_at=now
+                    )
+                )
+
+        await session.commit()
+
+        await _sync_sender_stats_from_messages(session)
+
+        total_cataloged_res = await session.execute(select(func.count(ScannedMessage.id)))
+        total_cataloged = total_cataloged_res.scalar() or fallback_count
+
+        sess_res = await session.execute(select(UserSession).where(UserSession.is_active == True))
+        u_sess = sess_res.scalar_one_or_none()
+        if u_sess:
+            u_sess.last_scan_at = now
+            u_sess.total_scanned_emails = total_cataloged
+
+        await session.commit()
+        return total_cataloged
+
+
+async def _run_demo_scan(job_id: str, max_emails: int) -> None:
+    """Simulates a Gmail scan and populates realistic sample data when unauthenticated."""
+    demo_total = min(max_emails, 500)
+    for i in range(0, demo_total + 1, 50):
+        if JobManager.is_cancelled(job_id):
+            await JobManager.update_job_progress(job_id, processed=i, status="cancelled", message="Scan cancelled.")
+            return
+        await asyncio.sleep(0.1)
+        await JobManager.update_job_progress(
+            job_id,
+            processed=i,
+            total=demo_total,
+            status="running",
+            current_item=f"Simulating Gmail batch {i // 50 + 1}",
+            message=f"Demo scan in progress: {i} of {demo_total} emails..."
+        )
+    async with AsyncSessionLocal() as session:
+        from .auth_routes import seed_demo_data
+        await seed_demo_data(session)
+
+    await JobManager.update_job_progress(
+        job_id,
+        processed=demo_total,
+        total=demo_total,
+        status="completed",
+        message=f"Demo scan complete! Cataloged {demo_total} sample emails."
+    )
+
 
 async def run_scan_worker(job_id: str, query: str, max_emails: int):
     if not is_authenticated():
-        # Demo simulation mode when Google OAuth is not yet connected
-        demo_total = min(max_emails, 500)
-        for i in range(0, demo_total + 1, 50):
-            if JobManager.is_cancelled(job_id):
-                await JobManager.update_job_progress(job_id, processed=i, status="cancelled", message="Scan cancelled.")
-                return
-            await asyncio.sleep(0.1)
-            await JobManager.update_job_progress(
-                job_id,
-                processed=i,
-                total=demo_total,
-                status="running",
-                current_item=f"Simulating Gmail batch {i//50 + 1}",
-                message=f"Demo scan in progress: {i} of {demo_total} emails..."
-            )
-        async with AsyncSessionLocal() as session:
-            from .auth_routes import seed_demo_data
-            await seed_demo_data(session)
-
-        await JobManager.update_job_progress(
-            job_id,
-            processed=demo_total,
-            total=demo_total,
-            status="completed",
-            message=f"Demo scan complete! Cataloged {demo_total} sample emails."
-        )
+        await _run_demo_scan(job_id, max_emails)
         return
 
     gmail = GmailService()
     try:
-        # Default query targets incoming mail, excluding user's own sent emails and drafts
         effective_query = query.strip()
         if not effective_query:
             effective_query = "-in:sent -in:draft"
         elif effective_query.lower() in ["all", "in:all"]:
             effective_query = ""
 
-        # Fetch active user's email to avoid treating the user as their own spam sender
+        # Fetch active user's email to avoid indexing the user as their own sender
         user_email = ""
         async with AsyncSessionLocal() as session:
             sess_res = await session.execute(select(UserSession).where(UserSession.is_active == True))
@@ -114,21 +283,24 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
 
         batch_size = 25
         processed_count = 0
-
-        # Temporary aggregations
-        sender_aggr: dict = {}
-        batch_messages: list = []
+        sender_aggr: Dict[str, Dict[str, Any]] = {}
+        batch_messages: List[ScannedMessage] = []
 
         limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
         async with httpx.AsyncClient(timeout=35.0, limits=limits) as client:
             for i in range(0, total_found, batch_size):
                 if JobManager.is_cancelled(job_id):
-                    await JobManager.update_job_progress(job_id, processed=processed_count, status="cancelled", message="Scan cancelled by user.")
+                    await _commit_senders_and_sync(sender_aggr, batch_messages, processed_count)
+                    await JobManager.update_job_progress(
+                        job_id,
+                        processed=processed_count,
+                        status="cancelled",
+                        message="Scan cancelled by user."
+                    )
                     return
 
                 chunk = message_ids[i:i + batch_size]
 
-                # Callback for user progress if quota throttles
                 async def on_batch_rate_limit(num_pending: int, delay: float):
                     await JobManager.update_job_progress(
                         job_id,
@@ -138,101 +310,55 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                         message=f"Gmail rate limit reached. Pausing {delay:.0f}s for quota window to reset ({num_pending} pending in batch)..."
                     )
 
-                # High-speed batch fetch via Google Batch API with sub-request retry
                 results = await gmail.batch_fetch_messages_metadata(client, chunk, on_rate_limit=on_batch_rate_limit)
 
                 for msg_data in results:
                     if not msg_data:
                         continue
                     try:
-                        mid = msg_data.get("id")
-                        thread_id = msg_data.get("threadId", "")
-                        size_estimate = int(msg_data.get("sizeEstimate", 0))
-                        label_ids = msg_data.get("labelIds", [])
-                        is_unread = "UNREAD" in label_ids
-
-                        headers = {h["name"].lower(): h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
-                        from_header = headers.get("from", "")
-                        subject = headers.get("subject", "(No Subject)")
-                        unsub_header = headers.get("list-unsubscribe", "")
-                        unsub_post_header = headers.get("list-unsubscribe-post", "")
-
-                        name, email_addr, domain = gmail.parse_sender_info(from_header)
-                        if not email_addr:
-                            email_addr = "unknown@unknown.domain"
-                            name = name or "Unknown Sender"
-                            domain = "unknown.domain"
-
+                        parsed = _parse_gmail_message(msg_data, gmail)
+                        if not parsed:
+                            continue
+                        meta, record = parsed
+                        email_addr = meta["email_addr"]
                         if user_email and email_addr.lower() == user_email:
                             continue
 
-                        http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_header, unsub_post_header)
-
                         if email_addr not in sender_aggr:
                             sender_aggr[email_addr] = {
-                                "name": name,
-                                "domain": domain,
+                                "name": meta["name"],
+                                "domain": meta["domain"],
                                 "count": 0,
                                 "unread_count": 0,
                                 "size": 0,
-                                "has_unsub": bool(http_url or mailto_uri),
-                                "unsub_url": http_url,
-                                "unsub_mailto": mailto_uri,
-                                "has_one_click": has_one_click,
-                                "sample_subject": subject,
+                                "has_unsub": meta["has_unsub"],
+                                "unsub_url": meta["unsub_url"],
+                                "unsub_mailto": meta["unsub_mailto"],
+                                "has_one_click": meta["has_one_click"],
+                                "sample_subject": meta["subject"],
                                 "categories": set()
                             }
 
                         s = sender_aggr[email_addr]
                         s["count"] += 1
-                        if is_unread:
+                        if meta["is_unread"]:
                             s["unread_count"] += 1
-                        s["size"] += size_estimate
+                        s["size"] += meta["size_estimate"]
 
-                        # Check labels for categories
-                        for lbl in label_ids:
+                        for lbl in meta["label_ids"]:
                             if lbl.startswith("CATEGORY_"):
                                 s["categories"].add(lbl.replace("CATEGORY_", "").lower())
 
-                        internal_ms = msg_data.get("internalDate")
-                        msg_date = safe_parse_internal_date(internal_ms)
-
-                        batch_messages.append(
-                            ScannedMessage(
-                                id=mid,
-                                thread_id=thread_id,
-                                sender_email=email_addr,
-                                sender_name=name,
-                                subject=subject,
-                                snippet=msg_data.get("snippet", ""),
-                                date=msg_date,
-                                size_estimate=size_estimate,
-                                label_ids=json.dumps(label_ids),
-                                has_unsubscribe=bool(http_url or mailto_uri),
-                                unsubscribe_url=http_url,
-                                unsubscribe_mailto=mailto_uri,
-                                has_one_click=has_one_click
-                            )
-                        )
+                        batch_messages.append(record)
                     except Exception as err:
-                        print(f"Warning: Failed parsing message {msg_data.get('id', 'unknown')}: {err}")
+                        logger.warning("Failed parsing message %s: %s", msg_data.get("id", "unknown"), err)
                         continue
 
                 processed_count += len(results)
 
-                # Incremental commit to DB every 100 messages
                 if len(batch_messages) >= 100:
                     async with AsyncSessionLocal() as session:
-                        for m in batch_messages:
-                            m_existing = await session.get(ScannedMessage, m.id)
-                            if not m_existing:
-                                session.add(m)
-                            else:
-                                m_existing.subject = m.subject
-                                m_existing.snippet = m.snippet
-                                m_existing.date = m.date
-                                m_existing.size_estimate = m.size_estimate
-                                m_existing.label_ids = m.label_ids
+                        await _upsert_scanned_messages(session, batch_messages)
                         await session.commit()
                     batch_messages.clear()
 
@@ -244,90 +370,10 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
                     message=f"Processed {processed_count} of {total_found} emails..."
                 )
 
-                # Gentle pacing between batches of 25 (0.5s) to stay within Google's 6,000 units/min per-user quota
+                # Gentle pacing between batches of 25 to stay within Gmail's per-user minute quota
                 await asyncio.sleep(0.5)
 
-        # Final commit for remaining messages and senders
-        async with AsyncSessionLocal() as session:
-            if batch_messages:
-                for m in batch_messages:
-                    m_existing = await session.get(ScannedMessage, m.id)
-                    if not m_existing:
-                        session.add(m)
-                    else:
-                        m_existing.subject = m.subject
-                        m_existing.snippet = m.snippet
-                        m_existing.date = m.date
-                        m_existing.size_estimate = m.size_estimate
-                        m_existing.label_ids = m.label_ids
-
-            # Upsert Senders
-            for email_addr, data in sender_aggr.items():
-                existing = await session.get(Sender, email_addr)
-                cats_str = ",".join(sorted(list(data["categories"])))
-                if existing:
-                    existing.name = data["name"] or existing.name
-                    existing.domain = data["domain"] or existing.domain
-                    existing.message_count = data["count"]
-                    existing.unread_count = data["unread_count"]
-                    existing.total_size_bytes = data["size"]
-                    if data["has_unsub"]:
-                        existing.has_unsubscribe = True
-                        existing.unsubscribe_url = data["unsub_url"] or existing.unsubscribe_url
-                        existing.unsubscribe_mailto = data["unsub_mailto"] or existing.unsubscribe_mailto
-                        existing.has_one_click = data["has_one_click"] or existing.has_one_click
-                    existing.categories = cats_str
-                    existing.sample_subject = data["sample_subject"] or existing.sample_subject
-                    existing.updated_at = datetime.utcnow()
-                else:
-                    new_sender = Sender(
-                        email=email_addr,
-                        name=data["name"],
-                        domain=data["domain"],
-                        message_count=data["count"],
-                        unread_count=data["unread_count"],
-                        total_size_bytes=data["size"],
-                        has_unsubscribe=data["has_unsub"],
-                        unsubscribe_url=data["unsub_url"],
-                        unsubscribe_mailto=data["unsub_mailto"],
-                        has_one_click=data["has_one_click"],
-                        categories=cats_str,
-                        sample_subject=data["sample_subject"],
-                        last_received_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow()
-                    )
-                    session.add(new_sender)
-
-            await session.commit()
-
-            # Recalculate sender message counts from scanned_messages to ensure 100% database consistency
-            cnt_query = select(
-                ScannedMessage.sender_email,
-                func.count(ScannedMessage.id),
-                func.sum(case((ScannedMessage.label_ids.like('%"UNREAD"%'), 1), else_=0)),
-                func.sum(ScannedMessage.size_estimate)
-            ).group_by(ScannedMessage.sender_email)
-            
-            cnt_res = await session.execute(cnt_query)
-            for s_email, m_cnt, u_cnt, s_bytes in cnt_res.all():
-                s_obj = await session.get(Sender, s_email)
-                if s_obj:
-                    s_obj.message_count = m_cnt
-                    s_obj.unread_count = u_cnt or 0
-                    s_obj.total_size_bytes = s_bytes or 0
-
-            # Count total cataloged emails
-            total_cataloged_res = await session.execute(select(func.count(ScannedMessage.id)))
-            total_cataloged = total_cataloged_res.scalar() or processed_count
-
-            # Update UserSession scan stats
-            sess_res = await session.execute(select(UserSession).where(UserSession.is_active == True))
-            u_sess = sess_res.scalar_one_or_none()
-            if u_sess:
-                u_sess.last_scan_at = datetime.utcnow()
-                u_sess.total_scanned_emails = total_cataloged
-
-            await session.commit()
+        total_cataloged = await _commit_senders_and_sync(sender_aggr, batch_messages, processed_count)
 
         await JobManager.update_job_progress(
             job_id,
@@ -338,6 +384,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
         )
 
     except Exception as e:
+        logger.exception("Inbox scan failed for job %s", job_id)
         await JobManager.update_job_progress(
             job_id,
             processed=0,
@@ -345,6 +392,7 @@ async def run_scan_worker(job_id: str, query: str, max_emails: int):
             message="Scan failed.",
             error_details=str(e)
         )
+
 
 @router.post("/scan")
 async def trigger_scan(
@@ -355,6 +403,7 @@ async def trigger_scan(
     job = await JobManager.create_job("scan", total_items=max_emails, message="Initializing scanner...")
     background_tasks.add_task(run_scan_worker, job.id, query, max_emails)
     return {"job_id": job.id, "status": "queued"}
+
 
 @router.get("/senders", response_model=SenderListResponse)
 async def list_senders(
@@ -390,26 +439,19 @@ async def list_senders(
     if is_unsubscribed is not None:
         stmt = stmt.where(Sender.is_unsubscribed == is_unsubscribed)
 
-    # Count total matching
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
     total = total_result.scalar_one()
 
-    # Sorting
-    sort_col = Sender.message_count
-    if sort_by == "size":
-        sort_col = Sender.total_size_bytes
-    elif sort_by == "unread":
-        sort_col = Sender.unread_count
-    elif sort_by == "domain":
-        sort_col = Sender.domain
-    elif sort_by == "name":
-        sort_col = Sender.name
-
-    if order == "desc":
-        stmt = stmt.order_by(desc(sort_col))
-    else:
-        stmt = stmt.order_by(asc(sort_col))
+    sort_col_map = {
+        "size": Sender.total_size_bytes,
+        "unread": Sender.unread_count,
+        "domain": Sender.domain,
+        "name": Sender.name,
+        "count": Sender.message_count,
+    }
+    sort_col = sort_col_map.get(sort_by, Sender.message_count)
+    stmt = stmt.order_by(desc(sort_col) if order == "desc" else asc(sort_col))
 
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(stmt)
@@ -422,9 +464,9 @@ async def list_senders(
         senders=[SenderResponse.model_validate(s) for s in senders]
     )
 
+
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats(db: AsyncSession = Depends(get_db)):
-    # Aggregates from DB
     res = await db.execute(
         select(
             func.count(Sender.email),
@@ -437,7 +479,6 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
     senders_cnt, emails_cnt, unread_cnt, size_bytes, news_cnt, unsub_cnt = res.one()
 
-    # User session details
     sess_res = await db.execute(select(UserSession).where(UserSession.is_active == True))
     user_sess = sess_res.scalar_one_or_none()
 
@@ -452,8 +493,10 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         user_name=user_sess.name if user_sess else None,
         user_picture=user_sess.picture if user_sess else None,
         is_authenticated=is_authenticated(),
+        is_demo_mode=settings.DEMO_MODE,
         last_scan_at=user_sess.last_scan_at if user_sess else None
     )
+
 
 @router.api_route("/scan/reset", methods=["GET", "POST"])
 async def reset_scan_database(db: AsyncSession = Depends(get_db)):
@@ -471,6 +514,7 @@ async def reset_scan_database(db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"status": "cleared"}
 
+
 @router.get("/sender-messages", response_model=SenderMessagesResponse)
 async def get_sender_messages(
     email: str = Query(..., description="Sender email address"),
@@ -478,21 +522,19 @@ async def get_sender_messages(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100)
 ):
-    import json
     clean_email = email.strip().lower()
     sender = await db.get(Sender, clean_email)
     sender_name = sender.name if sender else clean_email
 
-    # Query cached messages in SQLite
     stmt = (
         select(ScannedMessage)
         .where(ScannedMessage.sender_email == clean_email)
-        .order_by(ScannedMessage.id.desc())
+        .order_by(desc(ScannedMessage.date).nulls_last(), desc(ScannedMessage.id))
     )
     result = await db.execute(stmt)
     cached_messages = result.scalars().all()
 
-    # If few cached messages and user is authenticated, fetch live messages from Gmail
+    # If few cached messages and authenticated, backfill recent ones live from Gmail
     if len(cached_messages) < 10 and is_authenticated():
         try:
             gmail = GmailService()
@@ -500,64 +542,39 @@ async def get_sender_messages(
             if msg_ids:
                 semaphore = asyncio.Semaphore(15)
                 async with httpx.AsyncClient(timeout=20.0) as client:
-                    async def fetch_meta(mid):
+                    async def fetch_meta(mid: str):
                         async with semaphore:
                             return await gmail.fetch_message_metadata(client, mid)
-                    raw_results = await asyncio.gather(*[fetch_meta(mid) for mid in msg_ids])
 
+                    raw_results = await asyncio.gather(*[fetch_meta(mid) for mid in msg_ids])
+                    new_records: List[ScannedMessage] = []
                     for msg_data in raw_results:
                         if not msg_data:
                             continue
                         mid = msg_data.get("id")
-                        existing = await db.get(ScannedMessage, mid)
-                        if not existing:
-                            headers = {h["name"].lower(): h["value"] for h in msg_data.get("payload", {}).get("headers", [])}
-                            from_h = headers.get("from", "")
-                            s_name, s_email, _ = gmail.parse_sender_info(from_h)
-                            subject = headers.get("subject", "(No Subject)")
-                            unsub_h = headers.get("list-unsubscribe", "")
-                            unsub_post_h = headers.get("list-unsubscribe-post", "")
-                            http_url, mailto_uri, has_one_click = gmail.parse_unsubscribe_header(unsub_h, unsub_post_h)
-                            lbl_ids = msg_data.get("labelIds", [])
-                            internal_ms = msg_data.get("internalDate")
-                            msg_date = safe_parse_internal_date(internal_ms)
+                        if not mid or await db.get(ScannedMessage, mid):
+                            continue
+                        parsed = _parse_gmail_message(
+                            msg_data,
+                            gmail,
+                            forced_sender_email=clean_email,
+                            fallback_sender_name=sender_name,
+                        )
+                        if parsed:
+                            new_records.append(parsed[1])
 
-                            new_m = ScannedMessage(
-                                id=mid,
-                                thread_id=msg_data.get("threadId", mid),
-                                sender_email=clean_email,
-                                sender_name=s_name or sender_name,
-                                subject=subject,
-                                snippet=msg_data.get("snippet", ""),
-                                date=msg_date,
-                                size_estimate=int(msg_data.get("sizeEstimate", 0)),
-                                label_ids=json.dumps(lbl_ids),
-                                has_unsubscribe=bool(http_url or mailto_uri),
-                                unsubscribe_url=http_url,
-                                unsubscribe_mailto=mailto_uri,
-                                has_one_click=has_one_click
-                            )
-                            db.add(new_m)
-                    await db.commit()
-
-                # Re-query
-                res2 = await db.execute(stmt)
-                cached_messages = res2.scalars().all()
+                    if new_records:
+                        for record in new_records:
+                            db.add(record)
+                        await db.commit()
+                        res2 = await db.execute(stmt)
+                        cached_messages = res2.scalars().all()
         except Exception as e:
-            print(f"Error fetching live messages for {clean_email}: {e}")
+            logger.warning("Failed fetching live messages for %s: %s", clean_email, e)
 
-    # Build response items
     items = []
     for m in cached_messages:
-        try:
-            if m.label_ids and m.label_ids.startswith("["):
-                labels_list = ast.literal_eval(m.label_ids) if "'" in m.label_ids else json.loads(m.label_ids)
-            else:
-                labels_list = []
-        except Exception:
-            labels_list = []
-        is_unread = "UNREAD" in labels_list
-
+        labels_list = parse_label_ids(m.label_ids)
         items.append(
             EmailMessageItem(
                 id=m.id,
@@ -569,13 +586,12 @@ async def get_sender_messages(
                 date=m.date,
                 size_estimate=m.size_estimate,
                 label_ids=labels_list,
-                is_unread=is_unread,
+                is_unread="UNREAD" in labels_list,
                 has_unsubscribe=m.has_unsubscribe,
                 gmail_url=f"https://mail.google.com/mail/u/0/#all/{m.thread_id or m.id}"
             )
         )
 
-    # Slice for pagination
     start = (page - 1) * page_size
     paged_items = items[start:start + page_size]
 
@@ -586,6 +602,22 @@ async def get_sender_messages(
         messages=paged_items
     )
 
+
+async def _delete_cached_messages_and_sync(
+    db: AsyncSession, message_ids: List[str]
+) -> None:
+    """Removes deleted/trashed messages from cache and resyncs affected sender totals."""
+    res = await db.execute(
+        select(ScannedMessage.sender_email).where(ScannedMessage.id.in_(message_ids))
+    )
+    affected_emails = {row[0] for row in res.all() if row[0]}
+    await db.execute(delete(ScannedMessage).where(ScannedMessage.id.in_(message_ids)))
+    await db.flush()
+    if affected_emails:
+        await _sync_sender_stats_from_messages(db, affected_emails)
+    await db.commit()
+
+
 @router.post("/messages/trash")
 async def trash_specific_messages(req: IndividualMessageActionRequest, db: AsyncSession = Depends(get_db)):
     if not req.message_ids:
@@ -593,9 +625,9 @@ async def trash_specific_messages(req: IndividualMessageActionRequest, db: Async
     if is_authenticated():
         gmail = GmailService()
         await gmail.batch_modify(req.message_ids, add_labels=["TRASH"], remove_labels=["INBOX"])
-    await db.execute(delete(ScannedMessage).where(ScannedMessage.id.in_(req.message_ids)))
-    await db.commit()
+    await _delete_cached_messages_and_sync(db, req.message_ids)
     return {"status": "trashed", "count": len(req.message_ids)}
+
 
 @router.post("/messages/delete")
 async def delete_specific_messages(req: IndividualMessageActionRequest, db: AsyncSession = Depends(get_db)):
@@ -604,12 +636,16 @@ async def delete_specific_messages(req: IndividualMessageActionRequest, db: Asyn
     if is_authenticated():
         gmail = GmailService()
         await gmail.batch_delete(req.message_ids)
-    await db.execute(delete(ScannedMessage).where(ScannedMessage.id.in_(req.message_ids)))
-    await db.commit()
+    await _delete_cached_messages_and_sync(db, req.message_ids)
     return {"status": "permanently_deleted", "count": len(req.message_ids)}
 
+
 @router.post("/messages/read")
-async def mark_read_specific_messages(req: IndividualMessageActionRequest, read: bool = True, db: AsyncSession = Depends(get_db)):
+async def mark_read_specific_messages(
+    req: IndividualMessageActionRequest,
+    read: bool = True,
+    db: AsyncSession = Depends(get_db)
+):
     if not req.message_ids:
         return {"count": 0}
     if is_authenticated():
@@ -618,4 +654,21 @@ async def mark_read_specific_messages(req: IndividualMessageActionRequest, read:
             await gmail.batch_modify(req.message_ids, remove_labels=["UNREAD"])
         else:
             await gmail.batch_modify(req.message_ids, add_labels=["UNREAD"])
+
+    res = await db.execute(select(ScannedMessage).where(ScannedMessage.id.in_(req.message_ids)))
+    affected_emails: Set[str] = set()
+    for msg in res.scalars().all():
+        labels = parse_label_ids(msg.label_ids)
+        if read:
+            labels = [lbl for lbl in labels if lbl != "UNREAD"]
+        elif "UNREAD" not in labels:
+            labels.append("UNREAD")
+        msg.label_ids = json.dumps(labels)
+        if msg.sender_email:
+            affected_emails.add(msg.sender_email)
+
+    await db.flush()
+    if affected_emails:
+        await _sync_sender_stats_from_messages(db, affected_emails)
+    await db.commit()
     return {"status": "updated", "count": len(req.message_ids)}

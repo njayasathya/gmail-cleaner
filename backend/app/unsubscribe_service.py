@@ -1,10 +1,12 @@
 import urllib.parse
-from datetime import datetime
 from typing import Optional
 import httpx
 from .models import Sender
 from .gmail_service import GmailService
 from .schemas import UnsubscribeResult
+from .utils import get_logger
+
+logger = get_logger("unsubscribe_service")
 
 class UnsubscribeService:
     def __init__(self, gmail_service: Optional[GmailService] = None):
@@ -40,7 +42,7 @@ class UnsubscribeService:
                             message="Successfully unsubscribed via RFC 8058 One-Click POST."
                         )
             except Exception as e:
-                print(f"One-click POST error for {sender.email}: {e}")
+                logger.warning("One-click POST failed for %s: %s", sender.email, e)
 
         # 2. Try mailto: unsubscribe if available
         if sender.unsubscribe_mailto:
@@ -66,7 +68,7 @@ class UnsubscribeService:
                         message=f"Sent automated unsubscribe email to {recipient}."
                     )
             except Exception as e:
-                print(f"Mailto error for {sender.email}: {e}")
+                logger.warning("Mailto unsubscribe failed for %s: %s", sender.email, e)
 
         # 3. Try standard HTTP GET request
         if sender.unsubscribe_url:
