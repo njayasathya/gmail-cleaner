@@ -147,3 +147,69 @@ async def test_spa_path_traversal_blocked():
         assert "GOOGLE_CLIENT_SECRET" not in resp.text
 
 
+@pytest.mark.asyncio
+async def test_seed_demo_data_populates_senders_and_messages(tmp_path):
+    from unittest.mock import patch
+    from sqlalchemy import delete, func, select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from app.database import Base
+    from app.demo_data import DEMO_SENDER_SPECS, DEMO_SPECS_BY_EMAIL, build_demo_sender, seed_demo_inbox
+    from app.models import ScannedMessage, Sender
+    from app.routes.scan_routes import get_sender_messages
+
+    db_file = tmp_path / "demo_test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_factory() as db:
+        count = await seed_demo_inbox(db)
+        assert count == len(DEMO_SENDER_SPECS)
+
+        # Idempotent on repeat run
+        await seed_demo_inbox(db)
+
+        sender_count = (await db.execute(select(func.count(Sender.email)))).scalar_one()
+        assert sender_count == len(DEMO_SENDER_SPECS)
+
+        expected_total = sum(spec.message_count for spec in DEMO_SENDER_SPECS)
+        msg_count = (await db.execute(select(func.count(ScannedMessage.id)))).scalar_one()
+        assert msg_count == expected_total
+
+        amazon_msgs = (
+            await db.execute(select(ScannedMessage).where(ScannedMessage.sender_email == "deals@amazon.com"))
+        ).scalars().all()
+        assert len(amazon_msgs) == 520
+        assert sum(1 for m in amazon_msgs if '"UNREAD"' in m.label_ids) == 510
+        assert sum(m.size_estimate for m in amazon_msgs) == 98_000_000
+
+        # Simulate legacy DB where demo Sender exists without ScannedMessage rows
+        await db.execute(delete(ScannedMessage).where(ScannedMessage.sender_email == "deals@amazon.com"))
+        await db.commit()
+        with patch("app.routes.scan_routes.is_authenticated", return_value=False):
+            page1 = await get_sender_messages(email="deals@amazon.com", db=db, page=1, page_size=50)
+        assert page1.total == 520
+        assert len(page1.messages) == 50
+
+        # Simulate user-trashed demo sender (message_count == 0) -> never resurrected on re-seed
+        await db.execute(delete(ScannedMessage).where(ScannedMessage.sender_email == "deals@amazon.com"))
+        amz_sender = await db.get(Sender, "deals@amazon.com")
+        assert amz_sender is not None
+        amz_sender.message_count = 0
+        await db.commit()
+        await seed_demo_inbox(db)
+        after_trash_count = (
+            await db.execute(select(func.count(ScannedMessage.id)).where(ScannedMessage.sender_email == "deals@amazon.com"))
+        ).scalar_one()
+        assert after_trash_count == 0
+
+        # Verify build_demo_sender matches DEMO_SPECS_BY_EMAIL
+        built = build_demo_sender(DEMO_SPECS_BY_EMAIL["notifications@github.com"])
+        assert built.message_count == 680
+
+    await engine.dispose()
+
+
+

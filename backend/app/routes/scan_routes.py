@@ -16,6 +16,11 @@ from ..schemas import (
 from ..gmail_service import GmailService
 from ..jobs import JobManager
 from ..auth import is_authenticated
+from ..demo_data import (
+    DEMO_SPECS_BY_EMAIL,
+    build_demo_messages_for_spec,
+    is_unhydrated_demo_sender,
+)
 from ..utils import get_logger, utc_now, safe_parse_internal_date, parse_label_ids
 
 logger = get_logger("scan_routes")
@@ -533,6 +538,21 @@ async def get_sender_messages(
     )
     result = await db.execute(stmt)
     cached_messages = result.scalars().all()
+
+    if not cached_messages and not is_authenticated() and is_unhydrated_demo_sender(sender):
+        spec = DEMO_SPECS_BY_EMAIL.get(clean_email)
+        if spec:
+            demo_msgs = build_demo_messages_for_spec(
+                spec,
+                count=sender.message_count,
+                unread_count=sender.unread_count,
+                total_size_bytes=sender.total_size_bytes,
+            )
+            if demo_msgs:
+                db.add_all(demo_msgs)
+                await db.commit()
+                res_demo = await db.execute(stmt)
+                cached_messages = res_demo.scalars().all()
 
     # If few cached messages and authenticated, backfill recent ones live from Gmail
     if len(cached_messages) < 10 and is_authenticated():
