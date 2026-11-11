@@ -56,6 +56,7 @@ export async function fetchStats(): Promise<StatsResponse> {
 export async function fetchSenders(params: {
   q?: string;
   category?: string;
+  smart_query?: string;
   has_unsubscribe?: boolean;
   is_unsubscribed?: boolean;
   sort_by?: string;
@@ -66,6 +67,7 @@ export async function fetchSenders(params: {
   const searchParams = new URLSearchParams();
   if (params.q) searchParams.set('q', params.q);
   if (params.category) searchParams.set('category', params.category);
+  if (params.smart_query) searchParams.set('smart_query', params.smart_query);
   if (params.has_unsubscribe !== undefined) searchParams.set('has_unsubscribe', String(params.has_unsubscribe));
   if (params.is_unsubscribed !== undefined) searchParams.set('is_unsubscribed', String(params.is_unsubscribed));
   if (params.sort_by) searchParams.set('sort_by', params.sort_by);
@@ -130,31 +132,36 @@ export async function bulkArchive(senders: string[], filterQuery?: string): Prom
   return res.json();
 }
 
-export async function bulkMarkRead(senders: string[], read: boolean = true): Promise<{ job_id: string }> {
+export async function bulkMarkRead(senders: string[], read: boolean = true, filterQuery?: string): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/actions/read`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ senders, read })
+    body: JSON.stringify({ senders, read, filter_query: filterQuery })
   });
   if (!res.ok) throw new Error('Failed to update read status');
   return res.json();
 }
 
-export async function bulkMarkImportant(senders: string[], important: boolean = true): Promise<{ job_id: string }> {
+export async function bulkMarkImportant(senders: string[], important: boolean = true, filterQuery?: string): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/actions/important`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ senders, important })
+    body: JSON.stringify({ senders, important, filter_query: filterQuery })
   });
   if (!res.ok) throw new Error('Failed to update importance');
   return res.json();
 }
 
-export async function bulkApplyLabel(senders: string[], labelId: string, action: 'apply' | 'remove' = 'apply'): Promise<{ job_id: string }> {
+export async function bulkApplyLabel(
+  senders: string[],
+  labelId: string,
+  action: 'apply' | 'remove' = 'apply',
+  filterQuery?: string
+): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/actions/label`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ senders, label_id: labelId, action })
+    body: JSON.stringify({ senders, label_id: labelId, action, filter_query: filterQuery })
   });
   if (!res.ok) throw new Error('Failed to modify label');
   return res.json();
@@ -204,8 +211,19 @@ export async function deleteLabel(labelId: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete label');
 }
 
-export async function fetchSenderMessages(email: string, page = 1, pageSize = 50): Promise<SenderMessagesResponse> {
-  const res = await fetch(`${API_BASE}/sender-messages?email=${encodeURIComponent(email)}&page=${page}&page_size=${pageSize}`);
+export async function fetchSenderMessages(
+  email: string,
+  page = 1,
+  pageSize = 50,
+  smartQuery?: string
+): Promise<SenderMessagesResponse> {
+  const params = new URLSearchParams({
+    email,
+    page: String(page),
+    page_size: String(pageSize)
+  });
+  if (smartQuery) params.set('smart_query', smartQuery);
+  const res = await fetch(`${API_BASE}/sender-messages?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch messages for sender');
   return res.json();
 }
@@ -256,11 +274,14 @@ export function streamJob(
 ): () => void {
   const eventSource = new EventSource(`${API_BASE}/jobs/${jobId}/stream`);
 
+  let settled = false;
+
   eventSource.addEventListener('progress', (e) => {
     try {
       const data: JobProgress = JSON.parse(e.data);
       onProgress(data);
       if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+        settled = true;
         eventSource.close();
         if (onComplete) onComplete();
       }
@@ -269,8 +290,26 @@ export function streamJob(
     }
   });
 
-  eventSource.onerror = (err) => {
+  eventSource.onerror = async (err) => {
     eventSource.close();
+    if (settled) return;
+
+    // Fast background jobs may finish before the stream stabilizes; poll once before reporting failure.
+    try {
+      const res = await fetch(`${API_BASE}/jobs/${jobId}`);
+      if (res.ok) {
+        const job: JobProgress = await res.json();
+        onProgress(job);
+        if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+          settled = true;
+          if (onComplete) onComplete();
+          return;
+        }
+      }
+    } catch {
+      // Fall through to stream error callback
+    }
+
     if (onError) onError(err);
   };
 

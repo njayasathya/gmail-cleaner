@@ -48,8 +48,12 @@ class GmailService:
                     params["pageToken"] = page_token
 
                 resp = await client.get(f"{GMAIL_API_BASE}/messages", headers=headers, params=params)
+                if resp.status_code == 429:
+                    await asyncio.sleep(2.0)
+                    resp = await client.get(f"{GMAIL_API_BASE}/messages", headers=headers, params=params)
                 if resp.status_code != 200:
-                    break
+                    err_detail = resp.text[:300]
+                    raise RuntimeError(f"Gmail API error ({resp.status_code}) listing messages: {err_detail}")
 
                 data = resp.json()
                 messages = data.get("messages", [])

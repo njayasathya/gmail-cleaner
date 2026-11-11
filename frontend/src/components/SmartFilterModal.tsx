@@ -102,6 +102,7 @@ export const SmartFilterModal: React.FC<SmartFilterModalProps> = ({
               return (
                 <button
                   key={i}
+                  type="button"
                   onClick={() => {
                     onTriggerScanWithQuery(p.query);
                     onClose();
@@ -217,12 +218,14 @@ export const SmartFilterModal: React.FC<SmartFilterModalProps> = ({
         {/* Footer Actions */}
         <div className="flex gap-3 pt-3 border-t border-slate-800">
           <button
+            type="button"
             onClick={onClose}
             className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm font-medium text-slate-200 transition"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={() => {
               onTriggerScanWithQuery(currentQuery);
               onClose();

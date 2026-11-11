@@ -27,6 +27,8 @@ class DemoSenderSpec:
     categories: str
     sample_subject: str
     templates: Tuple[Tuple[str, str], ...]
+    hour_step: int = 6
+    large_samples: Tuple[Tuple[int, str, str, int], ...] = ()
 
 
 DEMO_SENDER_SPECS: Tuple[DemoSenderSpec, ...] = (
@@ -64,6 +66,15 @@ DEMO_SENDER_SPECS: Tuple[DemoSenderSpec, ...] = (
             (
                 "Exclusive offer: 2 months of Uber One on us",
                 "Unlock $0 delivery fee, up to 10% off eligible rides and orders, and member-only promotions.",
+            ),
+        ),
+        hour_step=10,
+        large_samples=(
+            (
+                5,
+                "Seasonal Dining Lookbook & Partner Restaurant Showcase",
+                "Full visual restaurant guide and seasonal tasting menu brochure with partner offers.",
+                6_100_000,
             ),
         ),
     ),
@@ -177,6 +188,20 @@ DEMO_SENDER_SPECS: Tuple[DemoSenderSpec, ...] = (
                 "Clip instant savings on compact GaN fast chargers, braided cables, and portable power banks.",
             ),
         ),
+        large_samples=(
+            (
+                5,
+                "Holiday Tech & Smart Home Catalog (PDF Brochure)",
+                "High-resolution seasonal lookbook and hardware gift guide with full spec charts.",
+                12_400_000,
+            ),
+            (
+                6,
+                "Prime Annual Home & Electronics Deal Book",
+                "Downloadable electronics savings catalog covering monitors, docks, and ultrabooks.",
+                6_800_000,
+            ),
+        ),
     ),
     DemoSenderSpec(
         slug="tldr",
@@ -249,6 +274,14 @@ DEMO_SENDER_SPECS: Tuple[DemoSenderSpec, ...] = (
             (
                 "[sqlalchemy/sqlalchemy] Discussion: Async SQLite best practices",
                 "Maintainers shared recommended timeout and transaction scoping patterns for concurrent background tasks.",
+            ),
+        ),
+        large_samples=(
+            (
+                5,
+                "[Docker/compose] Release bundle & CI diagnostic logs",
+                "Attached artifact bundle and matrix trace logs from integration pipeline run #1042.",
+                11_200_000,
             ),
         ),
     ),
@@ -398,14 +431,27 @@ def build_demo_messages_for_spec(
 
     ts = now or utc_now()
     cat_labels = _category_labels(spec.categories)
-    sizes = _compute_message_sizes(total_bytes, msg_count)
     templates = spec.templates
+
+    overrides: Dict[int, Tuple[str, str, int]] = {}
+    override_bytes = 0
+    for idx, subj, snip, sz in spec.large_samples:
+        if 0 <= idx < msg_count and total_bytes > override_bytes + sz + msg_count:
+            overrides[idx] = (subj, snip, sz)
+            override_bytes += sz
+
+    regular_count = msg_count - len(overrides)
+    regular_sizes = iter(_compute_message_sizes(total_bytes - override_bytes, regular_count))
 
     records: List[ScannedMessage] = []
     for i in range(msg_count):
-        subj_base, snippet = templates[i % len(templates)]
-        msg_date = ts - timedelta(hours=3 + i * 6)
-        subject = subj_base if i < len(templates) else f"{subj_base} ({msg_date.strftime('%b %d')})"
+        msg_date = ts - timedelta(hours=3 + i * spec.hour_step)
+        if i in overrides:
+            subject, snippet, msg_size = overrides[i]
+        else:
+            subj_base, snippet = templates[i % len(templates)]
+            subject = subj_base if i < len(templates) else f"{subj_base} ({msg_date.strftime('%b %d')})"
+            msg_size = next(regular_sizes)
 
         labels = ["INBOX"]
         if i < unread_target:
@@ -421,7 +467,7 @@ def build_demo_messages_for_spec(
                 subject=subject,
                 snippet=snippet,
                 date=msg_date,
-                size_estimate=sizes[i],
+                size_estimate=msg_size,
                 label_ids=json.dumps(labels),
                 has_unsubscribe=spec.has_unsubscribe,
                 unsubscribe_url=spec.unsubscribe_url,

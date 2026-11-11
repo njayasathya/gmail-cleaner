@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, X, Sparkles } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { StatsOverview } from './components/StatsOverview';
 import { SendersTable } from './components/SendersTable';
@@ -54,8 +54,10 @@ export const App: React.FC = () => {
   const [pageSize] = useState(50);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [activeSmartQuery, setActiveSmartQuery] = useState('');
   const [sortBy, setSortBy] = useState('count');
   const [sortOrder, setSortOrder] = useState('desc');
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // Selections
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
@@ -99,6 +101,7 @@ export const App: React.FC = () => {
       const res = await fetchSenders({
         q: searchQuery,
         category: selectedCategory,
+        smart_query: activeSmartQuery || undefined,
         sort_by: sortBy,
         order: sortOrder,
         page,
@@ -109,7 +112,7 @@ export const App: React.FC = () => {
     } catch (err: any) {
       notify('error', err?.message || 'Failed to load senders list');
     }
-  }, [searchQuery, selectedCategory, sortBy, sortOrder, page, pageSize, notify]);
+  }, [searchQuery, selectedCategory, activeSmartQuery, sortBy, sortOrder, page, pageSize, notify]);
 
   const loadNewsletters = useCallback(async () => {
     try {
@@ -138,7 +141,7 @@ export const App: React.FC = () => {
     loadSenders();
     loadNewsletters();
     loadLabels();
-  }, [loadAuthAndStats, loadSenders, loadNewsletters, loadLabels]);
+  }, [loadAuthAndStats, loadSenders, loadNewsletters, loadLabels, refreshTick]);
 
   // Subscribe to live background job updates
   const trackJob = (jobId: string) => {
@@ -163,9 +166,7 @@ export const App: React.FC = () => {
         setActiveJob(job);
       },
       () => {
-        loadAuthAndStats();
-        loadSenders();
-        loadNewsletters();
+        setRefreshTick((n) => n + 1);
         setSelectedEmails([]);
       },
       () => {
@@ -184,26 +185,40 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleScan = (query: string = '', maxEmails: number = 1000) =>
-    runJobAction(() => triggerScan(query, maxEmails), 'Could not start scan');
+  const smartFilterQuery = activeSmartQuery || undefined;
+
+  const handleScan = (query: string = '', maxEmails: number = 1000) => {
+    setActiveSmartQuery('');
+    setPage(1);
+    return runJobAction(() => triggerScan(query, maxEmails), 'Could not start scan');
+  };
+
+  const handleSmartScan = (query: string) => {
+    const clean = query.trim();
+    setActiveSmartQuery(clean);
+    setSelectedCategory('');
+    setPage(1);
+    setSelectedEmails([]);
+    return runJobAction(() => triggerScan(clean, 1000), 'Could not start smart filter scan');
+  };
 
   const handleBulkTrash = (emails: string[]) =>
-    runJobAction(() => bulkTrash(emails), 'Bulk trash failed');
+    runJobAction(() => bulkTrash(emails, smartFilterQuery), 'Bulk trash failed');
 
   const handleBulkPermanentDelete = (emails: string[]) =>
-    runJobAction(() => bulkPermanentDelete(emails), 'Permanent delete failed');
+    runJobAction(() => bulkPermanentDelete(emails, smartFilterQuery), 'Permanent delete failed');
 
   const handleBulkArchive = (emails: string[]) =>
-    runJobAction(() => bulkArchive(emails), 'Bulk archive failed');
+    runJobAction(() => bulkArchive(emails, smartFilterQuery), 'Bulk archive failed');
 
   const handleBulkMarkRead = (emails: string[], read: boolean) =>
-    runJobAction(() => bulkMarkRead(emails, read), 'Bulk mark read failed');
+    runJobAction(() => bulkMarkRead(emails, read, smartFilterQuery), 'Bulk mark read failed');
 
   const handleBulkMarkImportant = (emails: string[], important: boolean) =>
-    runJobAction(() => bulkMarkImportant(emails, important), 'Bulk mark important failed');
+    runJobAction(() => bulkMarkImportant(emails, important, smartFilterQuery), 'Bulk mark important failed');
 
   const handleBulkLabel = (emails: string[], labelId: string, action: 'apply' | 'remove') =>
-    runJobAction(() => bulkApplyLabel(emails, labelId, action), 'Bulk label failed');
+    runJobAction(() => bulkApplyLabel(emails, labelId, action, smartFilterQuery), 'Bulk label failed');
 
   const handleUnsubscribeBulk = (emails: string[], trashExisting: boolean = false) =>
     runJobAction(() => unsubscribeBulk(emails, trashExisting), 'Bulk unsubscribe failed');
@@ -257,8 +272,9 @@ export const App: React.FC = () => {
   const handleResetDatabase = async () => {
     try {
       await resetScanDatabase();
-      await Promise.all([loadAuthAndStats(), loadSenders(), loadNewsletters()]);
+      setActiveSmartQuery('');
       setSelectedEmails([]);
+      setRefreshTick((n) => n + 1);
       notify('success', 'Cached scan database cleared.');
     } catch (err: any) {
       notify('error', err?.message || 'Failed to reset database');
@@ -299,34 +315,72 @@ export const App: React.FC = () => {
   };
 
   const sendersTableNode = (
-    <SendersTable
-      senders={senders}
-      totalSenders={totalSenders}
-      page={page}
-      pageSize={pageSize}
-      onPageChange={setPage}
-      searchQuery={searchQuery}
-      onSearchChange={handleSearchChange}
-      selectedCategory={selectedCategory}
-      onCategoryChange={handleCategoryChange}
-      sortBy={sortBy}
-      sortOrder={sortOrder}
-      onSortChange={handleSortChange}
-      selectedEmails={selectedEmails}
-      onToggleSelect={handleToggleSelect}
-      onSelectAllPage={handleSelectAllPage}
-      onClearSelection={() => setSelectedEmails([])}
-      onBulkTrash={handleBulkTrash}
-      onBulkPermanentDelete={handleBulkPermanentDelete}
-      onBulkArchive={handleBulkArchive}
-      onBulkMarkRead={handleBulkMarkRead}
-      onBulkMarkImportant={handleBulkMarkImportant}
-      onBulkLabel={handleBulkLabel}
-      onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
-      onInspectSender={setInspectingSender}
-      onOpenLabelManager={() => setIsLabelModalOpen(true)}
-      availableLabels={labels}
-    />
+    <div className="space-y-4">
+      {activeSmartQuery && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl bg-indigo-950/60 border border-indigo-500/40 text-sm">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              <Sparkles className="w-3.5 h-3.5" />
+              Active Smart Filter
+            </span>
+            <code className="font-mono text-xs sm:text-sm text-white bg-slate-950/80 px-2.5 py-1 rounded-lg border border-slate-800">
+              {activeSmartQuery}
+            </code>
+            <span className="text-slate-300 text-xs sm:text-sm">
+              ({totalSenders} matching {totalSenders === 1 ? 'sender' : 'senders'})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsSmartFilterOpen(true)}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition"
+            >
+              Edit Filter
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveSmartQuery('');
+                setPage(1);
+                setSelectedEmails([]);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-200 hover:text-white border border-rose-500/30 text-xs font-medium transition"
+            >
+              Clear Filter
+            </button>
+          </div>
+        </div>
+      )}
+      <SendersTable
+        senders={senders}
+        totalSenders={totalSenders}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        searchQuery={searchQuery}
+        onSearchChange={handleSearchChange}
+        selectedCategory={selectedCategory}
+        onCategoryChange={handleCategoryChange}
+        sortBy={sortBy}
+        sortOrder={sortOrder}
+        onSortChange={handleSortChange}
+        selectedEmails={selectedEmails}
+        onToggleSelect={handleToggleSelect}
+        onSelectAllPage={handleSelectAllPage}
+        onClearSelection={() => setSelectedEmails([])}
+        onBulkTrash={handleBulkTrash}
+        onBulkPermanentDelete={handleBulkPermanentDelete}
+        onBulkArchive={handleBulkArchive}
+        onBulkMarkRead={handleBulkMarkRead}
+        onBulkMarkImportant={handleBulkMarkImportant}
+        onBulkLabel={handleBulkLabel}
+        onUnsubscribeSingle={(email) => handleUnsubscribeSingle(email, false)}
+        onInspectSender={setInspectingSender}
+        onOpenLabelManager={() => setIsLabelModalOpen(true)}
+        availableLabels={labels}
+      />
+    </div>
   );
 
   return (
@@ -398,7 +452,7 @@ export const App: React.FC = () => {
       <SmartFilterModal
         isOpen={isSmartFilterOpen}
         onClose={() => setIsSmartFilterOpen(false)}
-        onTriggerScanWithQuery={handleScan}
+        onTriggerScanWithQuery={handleSmartScan}
       />
 
       <LabelManagerModal
@@ -442,11 +496,9 @@ export const App: React.FC = () => {
 
       <EmailInspectorDrawer
         sender={inspectingSender}
+        smartQuery={smartFilterQuery}
         onClose={() => setInspectingSender(null)}
-        onMessagesModified={() => {
-          loadAuthAndStats();
-          loadSenders();
-        }}
+        onMessagesModified={() => setRefreshTick((n) => n + 1)}
         onNotify={notify}
       />
 

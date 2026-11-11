@@ -28,15 +28,17 @@ async def stream_job_progress(job_id: str, request: Request):
     queue = JobManager.subscribe(job_id)
 
     async def event_generator():
-        # First send the initial current state
-        initial_job = await JobManager.get_job(job_id)
-        if initial_job:
-            yield {
-                "event": "progress",
-                "data": json.dumps(initial_job.model_dump(mode="json"))
-            }
-
         try:
+            # First send the initial current state
+            initial_job = await JobManager.get_job(job_id)
+            if initial_job:
+                yield {
+                    "event": "progress",
+                    "data": json.dumps(initial_job.model_dump(mode="json"))
+                }
+                if initial_job.status in ["completed", "failed", "cancelled"]:
+                    return
+
             while True:
                 if await request.is_disconnected():
                     break

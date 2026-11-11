@@ -11,6 +11,7 @@ import { formatBytes, formatShortDate } from '../utils/format';
 
 interface EmailInspectorDrawerProps {
   sender: Sender | null;
+  smartQuery?: string;
   onClose: () => void;
   onMessagesModified?: () => void;
   onNotify?: (type: 'success' | 'error' | 'info', message: string) => void;
@@ -18,6 +19,7 @@ interface EmailInspectorDrawerProps {
 
 export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
   sender,
+  smartQuery,
   onClose,
   onMessagesModified,
   onNotify
@@ -45,7 +47,7 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
     setIsLoading(true);
     setPage(1);
     try {
-      const res = await fetchSenderMessages(sender.email, 1, 50);
+      const res = await fetchSenderMessages(sender.email, 1, 50, smartQuery);
       setMessages(res.messages);
       setTotalMessages(res.total);
     } catch (err) {
@@ -53,14 +55,14 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [sender]);
+  }, [sender, smartQuery]);
 
   const loadMore = async () => {
     if (!sender || isLoadingMore || messages.length >= totalMessages) return;
     setIsLoadingMore(true);
     try {
       const nextPage = page + 1;
-      const res = await fetchSenderMessages(sender.email, nextPage, 50);
+      const res = await fetchSenderMessages(sender.email, nextPage, 50, smartQuery);
       setMessages((prev) => [...prev, ...res.messages]);
       setPage(nextPage);
       setTotalMessages(res.total);
@@ -214,7 +216,10 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
 
           <div className="flex flex-wrap items-center gap-4 mt-4 pt-3.5 border-t border-slate-800/60 text-sm text-slate-400">
             <div>
-              <span className="font-bold text-slate-100">{totalMessages || sender.message_count}</span> emails indexed
+              <span className="font-bold text-slate-100">
+                {smartQuery ? totalMessages : (totalMessages || sender.message_count)}
+              </span>{' '}
+              {smartQuery ? 'matching emails' : 'emails indexed'}
             </div>
             <div className="h-3.5 w-px bg-slate-800" />
             <div>
@@ -224,6 +229,14 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
             <div>
               <span className="font-mono text-slate-200">{formatBytes(sender.total_size_bytes)}</span> estimated space
             </div>
+            {smartQuery && (
+              <>
+                <div className="h-3.5 w-px bg-slate-800" />
+                <span className="text-xs font-mono text-indigo-300 bg-indigo-500/15 border border-indigo-500/30 px-2 py-0.5 rounded-md">
+                  Filter: {smartQuery}
+                </span>
+              </>
+            )}
           </div>
         </div>
 

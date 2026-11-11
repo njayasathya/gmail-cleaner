@@ -21,6 +21,7 @@ from ..demo_data import (
     build_demo_messages_for_spec,
     is_unhydrated_demo_sender,
 )
+from ..smart_query import build_message_filter_clauses, count_matching_messages_stmt
 from ..utils import get_logger, utc_now, safe_parse_internal_date, parse_label_ids
 
 logger = get_logger("scan_routes")
@@ -208,38 +209,49 @@ async def _commit_senders_and_sync(
         return total_cataloged
 
 
-async def _run_demo_scan(job_id: str, max_emails: int) -> None:
+async def _run_demo_scan(job_id: str, max_emails: int, query: str = "") -> None:
     """Simulates a Gmail scan and populates realistic sample data when unauthenticated."""
+    clean_query = query.strip()
     demo_total = min(max_emails, 500)
     for i in range(0, demo_total + 1, 50):
         if JobManager.is_cancelled(job_id):
             await JobManager.update_job_progress(job_id, processed=i, status="cancelled", message="Scan cancelled.")
             return
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.06)
         await JobManager.update_job_progress(
             job_id,
             processed=i,
             total=demo_total,
             status="running",
-            current_item=f"Simulating Gmail batch {i // 50 + 1}",
+            current_item=f"Scanning {'filter: ' + clean_query if clean_query else f'Gmail batch {i // 50 + 1}'}",
             message=f"Demo scan in progress: {i} of {demo_total} emails..."
         )
+
+    match_count: Optional[int] = None
     async with AsyncSessionLocal() as session:
         from .auth_routes import seed_demo_data
         await seed_demo_data(session)
+        if clean_query:
+            res = await session.execute(count_matching_messages_stmt(clean_query))
+            match_count = res.scalar_one()
 
+    completion_msg = (
+        f"Demo smart scan complete! Found {match_count} sample emails matching '{clean_query}'."
+        if clean_query and match_count is not None
+        else f"Demo scan complete! Cataloged {demo_total} sample emails."
+    )
     await JobManager.update_job_progress(
         job_id,
         processed=demo_total,
         total=demo_total,
         status="completed",
-        message=f"Demo scan complete! Cataloged {demo_total} sample emails."
+        message=completion_msg
     )
 
 
 async def run_scan_worker(job_id: str, query: str, max_emails: int):
     if not is_authenticated():
-        await _run_demo_scan(job_id, max_emails)
+        await _run_demo_scan(job_id, max_emails, query=query)
         return
 
     gmail = GmailService()
@@ -410,20 +422,13 @@ async def trigger_scan(
     return {"job_id": job.id, "status": "queued"}
 
 
-@router.get("/senders", response_model=SenderListResponse)
-async def list_senders(
-    db: AsyncSession = Depends(get_db),
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    has_unsubscribe: Optional[bool] = None,
-    is_unsubscribed: Optional[bool] = None,
-    sort_by: str = Query("count", pattern="^(count|size|unread|domain|name)$"),
-    order: str = Query("desc", pattern="^(asc|desc)$"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200)
+def _apply_sender_filters(
+    stmt,
+    q: Optional[str],
+    category: Optional[str],
+    has_unsubscribe: Optional[bool],
+    is_unsubscribed: Optional[bool],
 ):
-    stmt = select(Sender)
-
     if q:
         search_pattern = f"%{q.lower()}%"
         stmt = stmt.where(
@@ -434,15 +439,89 @@ async def list_senders(
                 Sender.sample_subject.ilike(search_pattern)
             )
         )
-
     if category:
         stmt = stmt.where(Sender.categories.ilike(f"%{category.lower()}%"))
-
     if has_unsubscribe is not None:
         stmt = stmt.where(Sender.has_unsubscribe == has_unsubscribe)
-
     if is_unsubscribed is not None:
         stmt = stmt.where(Sender.is_unsubscribed == is_unsubscribed)
+    return stmt
+
+
+@router.get("/senders", response_model=SenderListResponse)
+async def list_senders(
+    db: AsyncSession = Depends(get_db),
+    q: Optional[str] = None,
+    category: Optional[str] = None,
+    smart_query: Optional[str] = Query(None, description="Optional Gmail search filter across cached messages"),
+    has_unsubscribe: Optional[bool] = None,
+    is_unsubscribed: Optional[bool] = None,
+    sort_by: str = Query("count", pattern="^(count|size|unread|domain|name)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200)
+):
+    clean_smart = smart_query.strip() if isinstance(smart_query, str) else ""
+    if clean_smart:
+        msg_clauses = build_message_filter_clauses(clean_smart)
+        msg_stmt = select(
+            ScannedMessage.sender_email.label("sender_email"),
+            func.count(ScannedMessage.id).label("msg_count"),
+            func.sum(case((ScannedMessage.label_ids.like('%"UNREAD"%'), 1), else_=0)).label("unread_count"),
+            func.sum(ScannedMessage.size_estimate).label("total_bytes"),
+            func.max(ScannedMessage.date).label("latest_date"),
+        )
+        if msg_clauses:
+            msg_stmt = msg_stmt.where(*msg_clauses)
+        msg_subq = msg_stmt.group_by(ScannedMessage.sender_email).subquery()
+
+        filtered_unread_expr = func.coalesce(msg_subq.c.unread_count, 0)
+        filtered_bytes_expr = func.coalesce(msg_subq.c.total_bytes, 0)
+
+        stmt = select(
+            Sender,
+            msg_subq.c.msg_count,
+            filtered_unread_expr.label("filtered_unread"),
+            filtered_bytes_expr.label("filtered_bytes"),
+            msg_subq.c.latest_date,
+        ).join(msg_subq, Sender.email == msg_subq.c.sender_email)
+
+        stmt = _apply_sender_filters(stmt, q, category, has_unsubscribe, is_unsubscribed)
+
+        total_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+        total = total_result.scalar_one()
+
+        sort_col_map = {
+            "size": filtered_bytes_expr,
+            "unread": filtered_unread_expr,
+            "domain": Sender.domain,
+            "name": Sender.name,
+            "count": msg_subq.c.msg_count,
+        }
+        sort_col = sort_col_map.get(sort_by, msg_subq.c.msg_count)
+        stmt = stmt.order_by(desc(sort_col) if order == "desc" else asc(sort_col))
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+
+        rows = (await db.execute(stmt)).all()
+        senders_payload = [
+            SenderResponse.model_validate(s).model_copy(
+                update={
+                    "message_count": int(m_cnt or 0),
+                    "unread_count": int(u_cnt or 0),
+                    "total_size_bytes": int(s_bytes or 0),
+                    "last_received_at": latest_dt or s.last_received_at,
+                }
+            )
+            for s, m_cnt, u_cnt, s_bytes, latest_dt in rows
+        ]
+        return SenderListResponse(
+            total=total,
+            page=page,
+            page_size=page_size,
+            senders=senders_payload,
+        )
+
+    stmt = _apply_sender_filters(select(Sender), q, category, has_unsubscribe, is_unsubscribed)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_result = await db.execute(count_stmt)
@@ -524,6 +603,7 @@ async def reset_scan_database(db: AsyncSession = Depends(get_db)):
 async def get_sender_messages(
     email: str = Query(..., description="Sender email address"),
     db: AsyncSession = Depends(get_db),
+    smart_query: Optional[str] = Query(None, description="Optional Gmail search filter query"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100)
 ):
@@ -591,6 +671,13 @@ async def get_sender_messages(
                         cached_messages = res2.scalars().all()
         except Exception as e:
             logger.warning("Failed fetching live messages for %s: %s", clean_email, e)
+
+    clean_smart = smart_query.strip() if isinstance(smart_query, str) else ""
+    if clean_smart:
+        filter_clauses = build_message_filter_clauses(clean_smart)
+        if filter_clauses:
+            res_filtered = await db.execute(stmt.where(*filter_clauses))
+            cached_messages = res_filtered.scalars().all()
 
     items = []
     for m in cached_messages:
