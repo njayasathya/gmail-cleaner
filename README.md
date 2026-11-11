@@ -2,6 +2,8 @@
 
 A 100% local, Dockerized bulk Gmail manager and newsletter unsubscribe web application. Scan thousands of emails into a fast local SQLite cache, inspect storage consumption by sender, mass-trash or archive clutter safely, and dispatch RFC 8058 one-click unsubscribes—without ever sending your emails or OAuth tokens to third-party servers.
 
+> **Built with Google Gemini:** This project was designed, engineered, and tested entirely using **Google Gemini**.
+
 ---
 
 ## Table of Contents
