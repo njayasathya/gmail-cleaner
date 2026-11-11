@@ -73,9 +73,9 @@ export const SmartFilterModal: React.FC<SmartFilterModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 sm:p-7 space-y-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full p-6 space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
               <Sparkles className="w-5 h-5" />
@@ -95,8 +95,8 @@ export const SmartFilterModal: React.FC<SmartFilterModalProps> = ({
 
         {/* Quick Presets */}
         <div>
-          <div className="text-sm font-semibold text-slate-200 mb-3">Recommended Clean Recipes</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="text-sm font-semibold text-slate-200 mb-2.5">Recommended Clean Recipes</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             {presets.map((p, i) => {
               const Icon = p.icon;
               return (
@@ -106,17 +106,17 @@ export const SmartFilterModal: React.FC<SmartFilterModalProps> = ({
                     onTriggerScanWithQuery(p.query);
                     onClose();
                   }}
-                  className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-indigo-500/50 hover:bg-slate-900 transition text-left group"
+                  className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-indigo-500/50 hover:bg-slate-900 transition text-left group"
                 >
-                  <div className={`p-2.5 rounded-xl ${p.color} flex-shrink-0 mt-0.5`}>
-                    <Icon className="w-5 h-5" />
+                  <div className={`p-2 rounded-xl ${p.color} flex-shrink-0 mt-0.5`}>
+                    <Icon className="w-4 h-4" />
                   </div>
                   <div className="min-w-0">
                     <div className="font-semibold text-slate-100 text-sm group-hover:text-indigo-400 transition">
                       {p.title}
                     </div>
-                    <div className="text-xs text-slate-400 mt-1 leading-snug">{p.desc}</div>
-                    <div className="font-mono text-xs text-indigo-400/90 mt-1.5">{p.query}</div>
+                    <div className="text-xs text-slate-400 mt-0.5 leading-snug">{p.desc}</div>
+                    <div className="font-mono text-xs text-indigo-400/90 mt-1">{p.query}</div>
                   </div>
                 </button>
               );
@@ -125,7 +125,7 @@ export const SmartFilterModal: React.FC<SmartFilterModalProps> = ({
         </div>
 
         {/* Custom Visual Filter Builder */}
-        <div className="space-y-4 pt-4 border-t border-slate-800">
+        <div className="space-y-3 pt-3 border-t border-slate-800">
           <div className="text-sm font-semibold text-slate-200">Custom Filter Builder</div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-sm">

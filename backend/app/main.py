@@ -50,9 +50,13 @@ app.include_router(export_routes.router, prefix="/api")
 app.include_router(job_routes.router, prefix="/api")
 
 # Serve built frontend in production / Docker if dist directory exists
-FRONTEND_DIST = settings.DATA_PATH.parent / "frontend" / "dist"
-if not FRONTEND_DIST.exists():
-    FRONTEND_DIST = Path(__file__).resolve().parent.parent / "dist"
+_dist_candidates = [
+    settings.DATA_PATH.parent / "frontend" / "dist",
+    Path(__file__).resolve().parent.parent / "frontend" / "dist",
+    Path(__file__).resolve().parent.parent / "dist",
+    Path(__file__).resolve().parent.parent.parent / "frontend" / "dist",
+]
+FRONTEND_DIST = next((p for p in _dist_candidates if p.exists()), _dist_candidates[-1])
 
 if FRONTEND_DIST.exists():
     DIST_ROOT = FRONTEND_DIST.resolve()

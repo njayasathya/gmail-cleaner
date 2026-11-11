@@ -8,6 +8,7 @@ A 100% local, Dockerized bulk Gmail manager and newsletter unsubscribe web appli
 
 ## Table of Contents
 
+- [Screenshots](#screenshots)
 - [Features in Detail](#features-in-detail)
 - [Quick Start: Docker (Recommended)](#quick-start-docker-recommended)
 - [Running Locally (Windows, macOS & Linux)](#running-locally-windows-macos--linux)
@@ -20,6 +21,37 @@ A 100% local, Dockerized bulk Gmail manager and newsletter unsubscribe web appli
 - [Security & Privacy](#security--privacy)
 - [Architecture](#architecture)
 - [Contributing & License](#contributing--license)
+
+---
+
+## Screenshots
+
+> Captured using built-in **Demo Mode** (`DEMO_MODE=true`) with synthetic sample data.
+
+### Sender Analytics Dashboard
+Overview KPIs, category filter pills, estimated inbox storage bars, and quick per-sender controls.
+
+![Sender Analytics Dashboard](docs/screenshots/dashboard.png)
+
+### Multi-Select Bulk Actions
+Select multiple senders to run batch Archive, Trash, Unsubscribe, Mark as Read, or Permanent Delete operations from the floating toolbar.
+
+![Multi-Select Bulk Actions](docs/screenshots/bulk-actions.png)
+
+### Email Inspector
+Expand any sender to browse individual emails, preview snippets and storage sizes, and delete specific messages or entire batches.
+
+![Email Inspector](docs/screenshots/email-inspector.png)
+
+### 1-Click Unsubscribe Hub
+Dedicated workspace listing eligible newsletters and mailing lists with RFC 8058 HTTP POST / `mailto:` unsubscribe status tracking.
+
+![1-Click Unsubscribe Hub](docs/screenshots/unsubscribe-hub.png)
+
+### Smart Filters & Targeted Cleanup
+Preset cleanup recipes and an interactive Gmail query builder for targeting large attachments, unread promotions, or aging notifications.
+
+![Smart Filters and Targeted Cleanup](docs/screenshots/smart-filters.png)
 
 ---
 
