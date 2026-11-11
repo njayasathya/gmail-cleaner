@@ -31,10 +31,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Enable CORS for Vite frontend dev server
+# Restrict CORS strictly to trusted local origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,15 +55,16 @@ if not FRONTEND_DIST.exists():
     FRONTEND_DIST = Path(__file__).resolve().parent.parent / "dist"
 
 if FRONTEND_DIST.exists():
+    DIST_ROOT = FRONTEND_DIST.resolve()
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        file_path = FRONTEND_DIST / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
+        candidate = (DIST_ROOT / full_path).resolve()
+        if candidate.is_relative_to(DIST_ROOT) and candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
         return FileResponse(
-            FRONTEND_DIST / "index.html",
+            DIST_ROOT / "index.html",
             headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
         )
 else:

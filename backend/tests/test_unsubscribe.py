@@ -30,3 +30,16 @@ def test_parse_unsubscribe_headers_empty():
     assert http_url is None
     assert mailto is None
     assert has_one_click is False
+
+
+def test_unsubscribe_url_ssrf_guard():
+    from app.unsubscribe_service import _is_safe_public_http_url
+
+    assert _is_safe_public_http_url("http://127.0.0.1:8000/api/scan/reset") is False
+    assert _is_safe_public_http_url("http://localhost:8000/api/actions/trash") is False
+    assert _is_safe_public_http_url("http://169.254.169.254/latest/meta-data/") is False
+    assert _is_safe_public_http_url("https://192.168.1.1/admin") is False
+    assert _is_safe_public_http_url("https://10.0.0.5/hook") is False
+    assert _is_safe_public_http_url("file:///etc/passwd") is False
+    assert _is_safe_public_http_url("javascript:alert(1)") is False
+

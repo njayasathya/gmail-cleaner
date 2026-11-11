@@ -9,7 +9,7 @@ from ..models import UserSession, Sender
 from ..schemas import GoogleCredentialsConfig
 from ..auth import (
     is_authenticated, is_configured, get_credentials, create_oauth_flow,
-    save_token, logout as auth_logout, fetch_user_info,
+    save_token, logout as auth_logout, fetch_user_info, save_credentials_file,
     save_code_verifier, get_and_clear_code_verifier
 )
 from ..config import settings
@@ -144,8 +144,8 @@ async def set_credentials(config: GoogleCredentialsConfig):
             "redirect_uris": [settings.GOOGLE_REDIRECT_URI]
         }
     }
-    with open(settings.CREDENTIALS_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    if not save_credentials_file(json.dumps(data)):
+        raise HTTPException(status_code=500, detail="Failed to store OAuth credentials")
 
     return {"status": "credentials_saved"}
 

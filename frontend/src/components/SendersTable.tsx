@@ -263,7 +263,7 @@ export const SendersTable: React.FC<SendersTableProps> = ({
               <a
                 href={getExportCsvUrl(selectedEmails)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600/30 text-emerald-200 hover:bg-emerald-600 hover:text-white border border-emerald-500/40 text-sm font-medium transition"
                 title="Export metadata as CSV"
               >

@@ -216,9 +216,9 @@ export const App: React.FC = () => {
         loadSenders();
         loadNewsletters();
         loadAuthAndStats();
-      } else if (res.manual_url) {
+      } else if (res.manual_url && /^https?:\/\//i.test(res.manual_url)) {
         notify('info', 'Opening sender unsubscribe link in a new tab.');
-        window.open(res.manual_url, '_blank');
+        window.open(res.manual_url, '_blank', 'noopener,noreferrer');
       } else {
         notify('info', res.message);
       }

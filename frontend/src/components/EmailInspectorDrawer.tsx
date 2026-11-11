@@ -195,7 +195,7 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
               <a
                 href={gmailSearchUrl}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-sm font-semibold transition"
                 title="Search this sender in official Gmail web interface"
               >
@@ -336,7 +336,7 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
                           <a
                             href={msg.gmail_url}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             className={`text-base truncate hover:text-indigo-400 transition flex items-center gap-1.5 group ${
                               msg.is_unread ? 'font-bold text-white' : 'font-medium text-slate-200'
                             }`}
@@ -386,7 +386,7 @@ export const EmailInspectorDrawer: React.FC<EmailInspectorDrawerProps> = ({
                           <a
                             href={msg.gmail_url}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition"
                             title="Open in Gmail tab"
                           >

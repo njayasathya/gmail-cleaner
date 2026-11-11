@@ -127,3 +127,23 @@ def test_parse_label_ids_and_gmail_message():
     assert record.id == "msg_test_1"
     assert record.subject == "Flash Sale"
 
+
+def test_csv_formula_sanitization():
+    from app.routes.export_routes import _sanitize_csv_cell
+
+    assert _sanitize_csv_cell("=CMD|'/C calc'!A0") == "'=CMD|'/C calc'!A0"
+    assert _sanitize_csv_cell("+1+1") == "'+1+1"
+    assert _sanitize_csv_cell("-2+3") == "'-2+3"
+    assert _sanitize_csv_cell("@SUM(1+1)") == "'@SUM(1+1)"
+    assert _sanitize_csv_cell("Normal Subject") == "Normal Subject"
+    assert _sanitize_csv_cell(42) == 42
+
+
+@pytest.mark.asyncio
+async def test_spa_path_traversal_blocked():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/../../backend/app/config.py")
+        # Must never return backend Python source code (falls back to SPA index or 404)
+        assert "GOOGLE_CLIENT_SECRET" not in resp.text
+
+

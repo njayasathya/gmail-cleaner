@@ -117,7 +117,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <a
               href="https://console.cloud.google.com/apis/credentials"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
             >
               <span>Google Cloud Console</span>

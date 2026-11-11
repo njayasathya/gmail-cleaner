@@ -44,11 +44,21 @@ def get_client_config() -> Optional[Dict[str, Any]]:
 def is_configured() -> bool:
     return get_client_config() is not None
 
+def _restrict_file_permissions(path) -> None:
+    """Restricts secret files to owner-only read/write on POSIX hosts."""
+    if os.name == "posix":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
 def save_credentials_file(content: str) -> bool:
     try:
         data = json.loads(content)
         with open(settings.CREDENTIALS_PATH, "w") as f:
             json.dump(data, f, indent=2)
+        _restrict_file_permissions(settings.CREDENTIALS_PATH)
         return True
     except Exception:
         return False
@@ -84,6 +94,7 @@ def save_code_verifier(state: str, code_verifier: Optional[str]):
         data[state] = code_verifier
         with open(STATE_FILE, "w") as f:
             json.dump(data, f)
+        _restrict_file_permissions(STATE_FILE)
     except Exception as e:
         logger.warning("Error saving code verifier: %s", e)
 
@@ -143,6 +154,7 @@ async def fetch_user_info(access_token: str) -> Dict[str, Any]:
 def save_token(creds: Credentials):
     with open(settings.TOKEN_PATH, "w") as token:
         token.write(creds.to_json())
+    _restrict_file_permissions(settings.TOKEN_PATH)
 
 def logout():
     if settings.TOKEN_PATH.exists():
