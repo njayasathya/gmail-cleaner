@@ -39,7 +39,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="flex items-center gap-2">
                 <span className="font-bold text-xl tracking-tight text-white">Gmail Cleaner</span>
                 <span className="text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                  Local
+                  Pro
                 </span>
               </div>
               <p className="text-sm text-slate-400 hidden sm:block">

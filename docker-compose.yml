@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  gmail-cleaner:
+  gmail-cleaner-pro:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gmail-cleaner
+    container_name: gmail-cleaner-pro
     restart: unless-stopped
     ports:
       - "${PORT:-8000}:8000"

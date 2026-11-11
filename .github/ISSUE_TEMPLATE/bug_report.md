@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug or unexpected behavior in Gmail Cleaner
+about: Report a bug or unexpected behavior in Gmail Cleaner Pro
 title: '[Bug]: '
 labels: bug
 ---

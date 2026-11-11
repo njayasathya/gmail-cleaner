@@ -1,4 +1,4 @@
-# Gmail Cleaner
+# Gmail Cleaner Pro
 
 A 100% local, Dockerized bulk Gmail manager and newsletter unsubscribe web application. Scan thousands of emails into a fast local SQLite cache, inspect storage consumption by sender, mass-trash or archive clutter safely, and dispatch RFC 8058 one-click unsubscribes—without ever sending your emails or OAuth tokens to third-party servers.
 
@@ -66,8 +66,8 @@ Docker builds both the React/Vite frontend and FastAPI backend in one multi-stag
 
 ### 1. Clone & Prepare Environment
 ```bash
-git clone https://github.com/njayasathya/gmail-cleaner.git
-cd gmail-cleaner
+git clone https://github.com/njayasathya/gmail-cleaner-pro.git
+cd gmail-cleaner-pro
 cp .env.example .env
 ```
 
@@ -89,7 +89,7 @@ Open **[http://localhost:8000](http://localhost:8000)** in your browser. Data an
 
 ## Running Locally (Windows, macOS & Linux)
 
-You can run Gmail Cleaner directly on your host machine without Docker using Python 3.11+ and Node.js 18+.
+You can run Gmail Cleaner Pro directly on your host machine without Docker using Python 3.11+ and Node.js 18+.
 
 > **Important:** `start-local.bat` and `./start.sh local` serve the built UI bundle from `frontend/dist` at `http://localhost:8000`. Make sure to run `npm install && npm run build` inside `frontend/` once (and after any frontend edits).
 
@@ -98,8 +98,8 @@ You can run Gmail Cleaner directly on your host machine without Docker using Pyt
 #### One-Time Local Setup (PowerShell or Command Prompt)
 ```powershell
 # 1. Clone repository
-git clone https://github.com/njayasathya/gmail-cleaner.git
-cd gmail-cleaner
+git clone https://github.com/njayasathya/gmail-cleaner-pro.git
+cd gmail-cleaner-pro
 copy .env.example .env
 
 # 2. Create Python virtual environment and install backend packages
@@ -120,8 +120,8 @@ npm --prefix frontend run build
 #### One-Time Local Setup
 ```bash
 # 1. Clone repository
-git clone https://github.com/njayasathya/gmail-cleaner.git
-cd gmail-cleaner
+git clone https://github.com/njayasathya/gmail-cleaner-pro.git
+cd gmail-cleaner-pro
 cp .env.example .env
 
 # 2. Create Python virtual environment and install backend packages
@@ -177,7 +177,7 @@ Vite automatically proxies `/api/*` requests to `http://localhost:8000`. FastAPI
 
 To connect a real Gmail account, create your own OAuth 2.0 Client ID in the [Google Cloud Console](https://console.cloud.google.com/):
 
-1. **Create a Project:** Open [Google Cloud Console](https://console.cloud.google.com/) and create a new project (e.g., `Gmail-Cleaner`).
+1. **Create a Project:** Open [Google Cloud Console](https://console.cloud.google.com/) and create a new project (e.g., `Gmail-Cleaner-Pro`).
 2. **Enable Gmail API:** Go to **APIs & Services > Library**, search for **Gmail API**, and click **Enable**.
 3. **Configure OAuth Consent Screen:**
    * Go to **APIs & Services > OAuth consent screen** and click **Get started**.

@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an improvement or new feature for Gmail Cleaner
+about: Suggest an improvement or new feature for Gmail Cleaner Pro
 title: '[Feature]: '
 labels: enhancement
 ---

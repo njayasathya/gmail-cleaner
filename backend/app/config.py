@@ -7,7 +7,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Settings(BaseSettings):
-    APP_NAME: str = "Gmail Cleaner"
+    APP_NAME: str = "Gmail Cleaner Pro"
     DEBUG: bool = False
     PORT: int = 8000
     HOST: str = "127.0.0.1"

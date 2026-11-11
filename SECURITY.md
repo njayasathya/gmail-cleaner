@@ -2,7 +2,7 @@
 
 ## Local-First Threat Model & Privacy Design
 
-Gmail Cleaner is designed to run **100% locally** on your machine or personal Docker host. No email metadata, OAuth credentials, or usage telemetry is ever transmitted to external third-party servers.
+Gmail Cleaner Pro is designed to run **100% locally** on your machine or personal Docker host. No email metadata, OAuth credentials, or usage telemetry is ever transmitted to external third-party servers.
 
 ### Built-In Security Controls
 

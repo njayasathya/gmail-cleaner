@@ -1,6 +1,6 @@
-# Contributing to Gmail Cleaner
+# Contributing to Gmail Cleaner Pro
 
-Thank you for your interest in contributing to **Gmail Cleaner**! All bug reports, documentation improvements, UI polish, and feature pull requests are welcome.
+Thank you for your interest in contributing to **Gmail Cleaner Pro**! All bug reports, documentation improvements, UI polish, and feature pull requests are welcome.
 
 ## Development Setup
 

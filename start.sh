@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 MODE="${1:-auto}"
 
 run_docker() {
-    echo "Starting Gmail Cleaner with Docker Compose..."
+    echo "Starting Gmail Cleaner Pro with Docker Compose..."
     docker compose up -d
     echo "App is running at http://localhost:8000"
 }
@@ -19,7 +19,7 @@ run_local() {
     if [ ! -d "frontend/dist" ]; then
         echo "Warning: frontend/dist not found. Build it once via: cd frontend && npm install && npm run build"
     fi
-    echo "Starting Gmail Cleaner locally with Python..."
+    echo "Starting Gmail Cleaner Pro locally with Python..."
     source backend/.venv/bin/activate
     python backend/run.py
 }

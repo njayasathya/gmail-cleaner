@@ -1,5 +1,5 @@
 @echo off
-echo Starting Gmail Cleaner container with Docker Compose...
+echo Starting Gmail Cleaner Pro container with Docker Compose...
 cd /d "%~dp0"
 docker compose up -d
 if %errorlevel% equ 0 (

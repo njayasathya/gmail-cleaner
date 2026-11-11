@@ -1,5 +1,5 @@
 @echo off
-echo Starting Gmail Cleaner locally...
+echo Starting Gmail Cleaner Pro locally...
 cd /d "%~dp0"
 if exist backend\.venv\Scripts\python.exe (
     if not exist frontend\dist\index.html (
