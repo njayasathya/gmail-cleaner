@@ -21,6 +21,7 @@ yarn-error.log*
 
 # Application storage, secrets & credentials
 data/
+data*/
 .env
 .env.*
 !.env.example
