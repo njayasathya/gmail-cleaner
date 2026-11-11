@@ -152,8 +152,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="font-semibold text-slate-200 text-sm">Quick Setup Instructions:</div>
               <ol className="list-decimal list-inside space-y-1 text-slate-400 leading-relaxed">
                 <li>Create a project on Google Cloud Console and enable the <strong className="text-slate-200">Gmail API</strong>.</li>
-                <li>Go to <strong className="text-slate-200">APIs &amp; Services &gt; Credentials</strong> and create an <strong className="text-slate-200">OAuth Client ID</strong>.</li>
-                <li>Application type: <strong className="text-slate-200">Web application</strong>.</li>
+                <li>Go to <strong className="text-slate-200">APIs &amp; Services &gt; OAuth consent screen &gt; Get started</strong>, choose <strong className="text-slate-200">External</strong>, complete setup, and add your email under <strong className="text-slate-200">Audience &gt; Test users</strong>.</li>
+                <li>Open the <strong className="text-slate-200">Clients</strong> tab, click <strong className="text-slate-200">Create client</strong>, and choose <strong className="text-slate-200">Web application</strong>.</li>
                 <li>
                   Add Authorized redirect URI:{' '}
                   <code className="bg-slate-900 px-1.5 py-0.5 rounded text-indigo-300">

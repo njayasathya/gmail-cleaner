@@ -180,16 +180,19 @@ To connect a real Gmail account, create your own OAuth 2.0 Client ID in the [Goo
 1. **Create a Project:** Open [Google Cloud Console](https://console.cloud.google.com/) and create a new project (e.g., `Gmail-Cleaner`).
 2. **Enable Gmail API:** Go to **APIs & Services > Library**, search for **Gmail API**, and click **Enable**.
 3. **Configure OAuth Consent Screen:**
-   * Choose **External** (or Internal for Google Workspace) and fill out the app name and support email.
-   * Under **Scopes**, add `https://mail.google.com/` (plus `userinfo.email` and `userinfo.profile`).
-   * Under **Test Users**, add the Gmail address you want to clean.
-4. **Create OAuth Client ID:**
-   * Go to **APIs & Services > Credentials > Create Credentials > OAuth client ID**.
-   * Select **Web application**.
+   * Go to **APIs & Services > OAuth consent screen** and click **Get started**.
+   * Enter App name (e.g., `gmail cleaner`) and User support email (your Gmail address), then click **Next**.
+   * Under **Audience**, choose **External** and click **Next**.
+   * Under **Contact Information**, enter your email address, click **Next**, and then click **Finish** and **Create**.
+   * Once created, go to the **Audience** tab on the same page and add your Gmail address under **Test users**.
+4. **Create OAuth Client:**
+   * From the same screen, open the **Clients** tab and click **Create client**.
+   * Select Application type: **Web application** and enter a client name (e.g., `gmail cleaner client 1`).
    * Add Authorized redirect URI:
      ```text
      http://localhost:8000/api/auth/callback
      ```
+   * Click **Create**, then copy the **Client ID** and **Client secret** (or download the JSON file).
 5. **Connect in the App:**
    * Either open **Settings** in the top navigation bar and enter your **Client ID** and **Client Secret**, OR set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env`, OR place your downloaded file at `data/credentials.json`.
    * Click **Connect Gmail** and approve access.
